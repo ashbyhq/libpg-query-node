@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786390488045,
+  "lastUpdate": 1786391585667,
   "repoUrl": "https://github.com/ashbyhq/libpg-query-node",
   "entries": {
     "native libpg-query (linux-x64, jemalloc)": [
@@ -87,6 +87,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Small query latency",
             "value": 15.711,
+            "unit": "us/parse"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "41898282+github-actions[bot]@users.noreply.github.com",
+            "name": "github-actions[bot]",
+            "username": "github-actions[bot]"
+          },
+          "committer": {
+            "email": "jeff@ashbyhq.com",
+            "name": "Jeff Lubetkin",
+            "username": "jefflub-ashby"
+          },
+          "distinct": true,
+          "id": "7c658cc6c1cedd19f3f2eb43dd8a00e42c81ea6c",
+          "message": "native: release 0.1.1\n\nFirst stable release. 0.1.1-beta.0 was published by hand; this is the first\ncut through the automated path, and the first to carry npm provenance.\n\nAlso moves the `latest` dist-tag off a prerelease — it currently points at\n0.1.1-beta.0, which `npm install @ashbyhq/libpg-query-native` resolves to\ntoday. The workflow derives `latest` for any non-prerelease version, so\npublishing this corrects it.\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-08-10T12:51:36-07:00",
+          "tree_id": "c855a5b7f439746ee438fd310f8ad0ceea05f955",
+          "url": "https://github.com/ashbyhq/libpg-query-node/commit/7c658cc6c1cedd19f3f2eb43dd8a00e42c81ea6c"
+        },
+        "date": 1786391584636,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Large query parse time",
+            "value": 1164,
+            "unit": "ms"
+          },
+          {
+            "name": "Large query peak RSS",
+            "value": 449,
+            "unit": "MB"
+          },
+          {
+            "name": "Large query retained RSS",
+            "value": 294.6,
+            "unit": "MB"
+          },
+          {
+            "name": "Small query latency",
+            "value": 14.901,
             "unit": "us/parse"
           }
         ]
