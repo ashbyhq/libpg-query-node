@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786390404760,
+  "lastUpdate": 1786390488045,
   "repoUrl": "https://github.com/ashbyhq/libpg-query-node",
   "entries": {
     "native libpg-query (linux-x64, jemalloc)": [
@@ -43,6 +43,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Small query latency",
             "value": 14.84,
+            "unit": "us/parse"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "41898282+github-actions[bot]@users.noreply.github.com",
+            "name": "github-actions[bot]",
+            "username": "github-actions[bot]"
+          },
+          "committer": {
+            "email": "jeff@ashbyhq.com",
+            "name": "Jeff Lubetkin",
+            "username": "jefflub-ashby"
+          },
+          "distinct": false,
+          "id": "136432f3d9989a8b08978319de247ff4cec89879",
+          "message": "native: publish via npm trusted publishing instead of a token\n\nThe release workflow referenced secrets.NPM_TOKEN, but the repo has no\nsecrets at all — repo or org. It has never run, and no native-v* tag\nexists: the published 0.1.1-beta.0 was pushed by hand from a laptop. So\nthe publish path was never going to work as written.\n\nRather than add a long-lived credential to something entering a production\ndependency chain, authenticate with OIDC. npm verifies the workflow's\nidentity directly, there is nothing to leak or rotate, and provenance\nattestations are generated automatically.\n\n- publish job gains id-token: write; both NODE_AUTH_TOKEN entries are gone.\n  registry-url stays — it tells npm which registry verifies the token.\n- Asserts npm >= 11.5.1 before publishing. Node 24.0.0 shipped npm 11.3.0\n  and `node-version: 24` floats to the newest 24.x, so this should not be\n  left to chance in a workflow that publishes.\n- The platform-package loop now skips any package already published at the\n  target version. Each of the six packages carries its own trusted-publisher\n  config, so a single bad config fails one publish mid-loop; without this a\n  re-run would die on EPUBLISHCONFLICT for an earlier package instead of\n  completing. The main package still publishes last, so a partial failure\n  never advertises platform packages that do not exist.\n\nREADME documents the six configs, the required fields, and the npm version\nfloor.\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-08-10T12:32:12-07:00",
+          "tree_id": "c42b20fc792cb482c90e9d249c607cc181e196f4",
+          "url": "https://github.com/ashbyhq/libpg-query-node/commit/136432f3d9989a8b08978319de247ff4cec89879"
+        },
+        "date": 1786390487560,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Large query parse time",
+            "value": 1167.1,
+            "unit": "ms"
+          },
+          {
+            "name": "Large query peak RSS",
+            "value": 453.5,
+            "unit": "MB"
+          },
+          {
+            "name": "Large query retained RSS",
+            "value": 294.8,
+            "unit": "MB"
+          },
+          {
+            "name": "Small query latency",
+            "value": 15.711,
             "unit": "us/parse"
           }
         ]
