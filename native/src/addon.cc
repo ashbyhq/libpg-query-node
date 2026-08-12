@@ -1,6 +1,7 @@
 #include <napi.h>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 extern "C" {
 #include "pg_query.h"
@@ -235,12 +236,148 @@ static Napi::Value ScanSync(const Napi::CallbackInfo &info) {
   return obj;
 }
 
+// The inverse of pg_query_parse. Takes the protobuf encoding of a parse tree
+// (JS encodes the JSON tree with protobuf-es — see src/proto.ts) and returns
+// SQL. Options mirror PostgresDeparseOpts; everything except `comments` is a
+// pretty-print option upstream, so it only applies alongside prettyPrint.
+static Napi::Value DeparseSync(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() < 1 || !info[0].IsTypedArray()) {
+    Napi::TypeError::New(env, "Expected a Uint8Array of protobuf-encoded parse tree")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  Napi::Uint8Array buf = info[0].As<Napi::Uint8Array>();
+  if (buf.ByteLength() == 0) {
+    Napi::Error::New(env, "Parse tree cannot be empty").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  PgQueryProtobuf parse_tree;
+  parse_tree.data = reinterpret_cast<char *>(buf.Data());
+  parse_tree.len = buf.ByteLength();
+
+  const bool has_opts = info.Length() > 1 && info[1].IsObject();
+
+  // Owns the comment strings for the duration of the deparse call.
+  std::vector<std::string> comment_texts;
+  std::vector<PostgresDeparseComment> comment_storage;
+  std::vector<PostgresDeparseComment *> comment_ptrs;
+
+  PostgresDeparseOpts opts = {};
+
+  if (has_opts) {
+    Napi::Object o = info[1].As<Napi::Object>();
+
+    auto boolOpt = [&](const char *key) -> bool {
+      return o.Has(key) && o.Get(key).ToBoolean().Value();
+    };
+    auto intOpt = [&](const char *key, int fallback) -> int {
+      return o.Has(key) && o.Get(key).IsNumber()
+                 ? o.Get(key).As<Napi::Number>().Int32Value()
+                 : fallback;
+    };
+
+    opts.pretty_print = boolOpt("prettyPrint");
+    opts.indent_size = intOpt("indentSize", 4);
+    opts.max_line_length = intOpt("maxLineLength", 80);
+    opts.trailing_newline = boolOpt("trailingNewline");
+    opts.commas_start_of_line = boolOpt("commasStartOfLine");
+
+    if (o.Has("comments") && o.Get("comments").IsArray()) {
+      Napi::Array arr = o.Get("comments").As<Napi::Array>();
+      const uint32_t n = arr.Length();
+
+      // Reserve up front: comment_storage must not reallocate while
+      // comment_ptrs holds pointers into it.
+      comment_texts.reserve(n);
+      comment_storage.reserve(n);
+      comment_ptrs.reserve(n);
+
+      for (uint32_t i = 0; i < n; i++) {
+        if (!arr.Get(i).IsObject()) continue;
+        Napi::Object c = arr.Get(i).As<Napi::Object>();
+
+        comment_texts.push_back(
+            c.Has("text") ? c.Get("text").ToString().Utf8Value() : std::string());
+
+        PostgresDeparseComment entry = {};
+        entry.match_location =
+            c.Has("matchLocation") ? c.Get("matchLocation").ToNumber().Int32Value() : 0;
+        entry.newlines_before_comment =
+            c.Has("newlinesBefore") ? c.Get("newlinesBefore").ToNumber().Int32Value() : 0;
+        entry.newlines_after_comment =
+            c.Has("newlinesAfter") ? c.Get("newlinesAfter").ToNumber().Int32Value() : 0;
+        entry.str = const_cast<char *>(comment_texts.back().c_str());
+        comment_storage.push_back(entry);
+      }
+
+      for (auto &entry : comment_storage) comment_ptrs.push_back(&entry);
+
+      opts.comments = comment_ptrs.data();
+      opts.comment_count = comment_ptrs.size();
+    }
+  }
+
+  PgQueryDeparseResult result = has_opts
+                                    ? pg_query_deparse_protobuf_opts(parse_tree, opts)
+                                    : pg_query_deparse_protobuf(parse_tree);
+
+  if (result.error) {
+    Napi::Value ret = ReturnError(env, result.error);
+    pg_query_free_deparse_result(result);
+    return ret;
+  }
+
+  std::string sql(result.query ? result.query : "");
+  pg_query_free_deparse_result(result);
+  return ReturnResult(env, sql);
+}
+
+// Parse trees don't carry comments, so a parse/deparse round trip drops them.
+// Pull them off the source here so they can be handed back to DeparseSync.
+static Napi::Value ExtractCommentsSync(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+  std::string query = ValidateQuery(env, info);
+  if (env.IsExceptionPending()) return env.Undefined();
+
+  PgQueryDeparseCommentsResult result = pg_query_deparse_comments_for_query(query.c_str());
+
+  if (result.error) {
+    Napi::Value ret = ReturnError(env, result.error);
+    pg_query_free_deparse_comments_result(result);
+    return ret;
+  }
+
+  Napi::Array comments = Napi::Array::New(env, result.comment_count);
+  for (size_t i = 0; i < result.comment_count; i++) {
+    PostgresDeparseComment *c = result.comments[i];
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("matchLocation", Napi::Number::New(env, c->match_location));
+    obj.Set("newlinesBefore", Napi::Number::New(env, c->newlines_before_comment));
+    obj.Set("newlinesAfter", Napi::Number::New(env, c->newlines_after_comment));
+    obj.Set("text", Napi::String::New(env, c->str ? c->str : ""));
+    comments[i] = obj;
+  }
+
+  pg_query_free_deparse_comments_result(result);
+
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("error", env.Null());
+  obj.Set("result", comments);
+  return obj;
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("parseSync", Napi::Function::New(env, ParseSync));
   exports.Set("parsePlPgSQLSync", Napi::Function::New(env, ParsePlPgSQLSync));
   exports.Set("fingerprintSync", Napi::Function::New(env, FingerprintSync));
   exports.Set("normalizeSync", Napi::Function::New(env, NormalizeSync));
   exports.Set("scanSync", Napi::Function::New(env, ScanSync));
+  exports.Set("deparseSync", Napi::Function::New(env, DeparseSync));
+  exports.Set("extractCommentsSync", Napi::Function::New(env, ExtractCommentsSync));
   return exports;
 }
 

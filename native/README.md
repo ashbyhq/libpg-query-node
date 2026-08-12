@@ -93,7 +93,7 @@ supportedArchitectures:
 Drop-in replacement for `@libpg-query/parser`:
 
 ```js
-const { parse, parseSync, fingerprint, normalize, scan } = require('@ashbyhq/libpg-query-native');
+const { parse, parseSync, deparse, deparseSync, fingerprint, normalize, scan } = require('@ashbyhq/libpg-query-native');
 
 // Sync (no init needed — native loads instantly)
 const result = parseSync('SELECT id, name FROM users WHERE active = true');
@@ -111,6 +111,91 @@ const result2 = await parse('SELECT id, name FROM users WHERE active = true');
 | `fingerprintSync(sql)` / `fingerprint(sql)` | ✓ | ✓ | 16-char hex fingerprint |
 | `normalizeSync(sql)` / `normalize(sql)` | ✓ | ✓ | Normalized query string |
 | `scanSync(sql)` / `scan(sql)` | ✓ | ✓ | `ScanResult` with tokens |
+| `deparseSync(tree, opts?)` / `deparse(tree, opts?)` | ✓ | ✓ | SQL string |
+| `extractCommentsSync(sql)` / `extractComments(sql)` | ✓ | ✓ | `DeparseComment[]` |
+
+### Deparsing
+
+`deparse()` is the inverse of `parse()`, using PostgreSQL's own deparser rather than a
+reimplementation of it — so its output tracks the server's grammar, and constructs added
+in PG 18 round-trip instead of being silently dropped.
+
+```js
+const { parseSync, deparseSync } = require('@ashbyhq/libpg-query-native');
+
+const tree = parseSync('select a,b   from   t where x=1');
+deparseSync(tree);
+// SELECT a, b FROM t WHERE x = 1
+
+// Edit the tree in between to rewrite a query:
+tree.stmts[0].stmt.SelectStmt.fromClause[0].RangeVar.relname = 'other_table';
+deparseSync(tree);
+// SELECT a, b FROM other_table WHERE x = 1
+```
+
+Encoding is strict: a misspelled field or a bogus enum value throws rather than being
+dropped and deparsed into quietly wrong SQL. Trees the deparser itself rejects throw a
+`SqlError` carrying the failing C function and line.
+
+#### Formatting
+
+`prettyPrint` breaks the statement across lines. The remaining layout options are
+pretty-print options upstream, so they only take effect alongside it.
+
+```js
+deparseSync(tree, { prettyPrint: true, indentSize: 2 });
+// SELECT a, b, c
+// FROM mytable
+// WHERE
+//   x = 1
+//   AND y = 2
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `prettyPrint` | `false` | Break the statement across lines |
+| `indentSize` | `4` | Spaces per indent level |
+| `maxLineLength` | `80` | Soft wrap width for lists of items |
+| `trailingNewline` | `false` | Append a newline after the statement |
+| `commasStartOfLine` | `false` | Put separating commas at the start of the line |
+| `comments` | — | Comments to weave back in (see below) |
+
+#### Comments
+
+Parse trees don't carry comments, so a parse/deparse round trip drops them. Pull them
+off the source first and hand them back:
+
+```js
+const { extractCommentsSync } = require('@ashbyhq/libpg-query-native');
+
+const sql = '-- keep me\nSELECT a FROM t';
+deparseSync(parseSync(sql), { comments: extractCommentsSync(sql) });
+// -- keep me
+// SELECT a FROM t
+```
+
+Each comment carries `matchLocation` (the offset it anchors to), `newlinesBefore`,
+`newlinesAfter` and `text` — filter or rewrite the list before passing it back.
+
+#### How the tree gets to the deparser
+
+`pg_query_deparse_protobuf()` takes a protobuf-encoded tree, but `parse()` returns JSON.
+`pg_query.proto` maps between the two with `json_name` annotations — 1,683 of them, which
+is why `SelectStmt` and `targetList` in the JSON correspond to `select_stmt` and
+`target_list` in the schema. [protobufjs ignores
+`json_name`](https://github.com/protobufjs/protobuf.js/pull/1825), so this used to be a
+dead end; [`@bufbuild/protobuf`](https://github.com/bufbuild/protobuf-es) honours it.
+
+The generated schema lives in `src/gen/pg_query_pb.ts` and is committed, so `npm ci` and
+the platform builds need no protobuf toolchain. Regenerate it when the libpg_query pin
+moves:
+
+```bash
+npm run generate:proto
+```
+
+That refuses to run unless `protos/18/pg_query.proto` matches the pinned tag — a tree
+encoded against a mismatched schema would deparse into wrong SQL rather than fail loudly.
 
 ## Using jemalloc for optimal memory
 

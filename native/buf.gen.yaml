@@ -1,0 +1,7 @@
+version: v2
+plugins:
+  # Resolved from PATH — scripts/generate-proto.mjs prepends node_modules/.bin.
+  - local: protoc-gen-es
+    out: src/gen
+    opt:
+      - target=ts

@@ -45,6 +45,8 @@ const PUBLIC_SURFACE = [
   "fingerprint", "fingerprintSync",
   "normalize", "normalizeSync",
   "scan", "scanSync",
+  "deparse", "deparseSync",
+  "extractComments", "extractCommentsSync",
   "loadModule", "SqlError", "hasSqlDetails",
 ];
 
@@ -216,6 +218,57 @@ if (deparseSync) {
   } else {
     console.log("\n  note  all tracked PG18 constructs now survive the deparser — it may have caught up.");
   }
+}
+
+// --- 6. Native deparse -------------------------------------------------------
+// The same round trip as section 4, but rendered by PostgreSQL's own deparser
+// inside this package instead of pgsql-deparser. Also proves the bundled
+// protobuf schema actually shipped: encoding lives in dist/gen, so a packaging
+// mistake surfaces here as a require failure rather than in production.
+if (typeof ours.deparseSync === "function") {
+  const broken = [];
+  for (const sql of ROUND_TRIP_SQL) {
+    try {
+      const first = parseSync(sql);
+      const second = parseSync(ours.deparseSync(first));
+      if (
+        JSON.stringify(stripPositions(first.stmts)) !==
+        JSON.stringify(stripPositions(second.stmts))
+      ) {
+        broken.push(sql);
+      }
+    } catch (e) {
+      broken.push(`${sql}\n         ${e.constructor?.name}: ${e.message}`);
+    }
+  }
+  broken.length === 0
+    ? ok("AST round-trips through native deparse", `${ROUND_TRIP_SQL.length} statements`)
+    : fail(
+        "AST round-trips through native deparse",
+        `${broken.length}/${ROUND_TRIP_SQL.length} failed:\n       - ${broken.join("\n       - ")}`
+      );
+
+  // The deparser here is compiled from the same PG 18 source as the parser, so
+  // the constructs section 5 warns about should survive. If one of these ever
+  // fails, the two halves have drifted apart.
+  const lossy = PG18_ONLY.filter(([, sql]) => {
+    try {
+      const first = parseSync(sql);
+      const second = parseSync(ours.deparseSync(first));
+      return (
+        JSON.stringify(stripPositions(first.stmts)) !==
+        JSON.stringify(stripPositions(second.stmts))
+      );
+    } catch {
+      return true;
+    }
+  }).map(([label]) => label);
+
+  lossy.length === 0
+    ? ok("PG18 constructs survive native deparse", `${PG18_ONLY.length} constructs`)
+    : fail("PG18 constructs survive native deparse", `lossy: ${lossy.join(", ")}`);
+} else {
+  fail("native deparse exported", "deparseSync missing from the package");
 }
 
 console.log(failures === 0 ? "\nConsumer contract holds." : `\n${failures} check(s) failed.`);

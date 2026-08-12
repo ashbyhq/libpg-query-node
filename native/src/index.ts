@@ -1,5 +1,7 @@
 import type { ParseResult } from "@pgsql/types";
 
+import { encodeParseTree } from "./proto";
+
 export type { ParseResult } from "@pgsql/types";
 
 export interface ScanToken {
@@ -38,6 +40,42 @@ export class SqlError extends Error {
 
 export function hasSqlDetails(error: unknown): error is SqlError {
   return error instanceof SqlError && error.sqlDetails !== undefined;
+}
+
+/**
+ * A comment lifted out of a source query, positioned so it can be re-inserted
+ * when deparsing an edited tree. Produced by {@link extractComments}.
+ */
+export interface DeparseComment {
+  /** Insert before the first node whose `location` is at or past this offset. */
+  matchLocation: number;
+  /** Newlines to emit before the comment. */
+  newlinesBefore: number;
+  /** Newlines to emit after the comment. */
+  newlinesAfter: number;
+  /** The comment text, including its delimiters. */
+  text: string;
+}
+
+/**
+ * Formatting options for {@link deparse}.
+ *
+ * Everything except `comments` is a pretty-print option upstream, so it only
+ * takes effect alongside `prettyPrint: true`.
+ */
+export interface DeparseOptions {
+  /** Break the statement across lines instead of emitting it on one. */
+  prettyPrint?: boolean;
+  /** Spaces per indent level. Defaults to 4. Requires `prettyPrint`. */
+  indentSize?: number;
+  /** Soft wrap width for lists of items. Defaults to 80. Requires `prettyPrint`. */
+  maxLineLength?: number;
+  /** Append a newline after the statement. Requires `prettyPrint`. */
+  trailingNewline?: boolean;
+  /** Put separating commas at the start of the line. Requires `prettyPrint`. */
+  commasStartOfLine?: boolean;
+  /** Comments to weave back in, typically from {@link extractComments}. */
+  comments?: DeparseComment[];
 }
 
 function loadNativeAddon(): NativeAddon {
@@ -118,6 +156,8 @@ interface NativeAddon {
   fingerprintSync(query: string): NativeResult;
   normalizeSync(query: string): NativeResult;
   scanSync(query: string): NativeResult<ScanResult>;
+  deparseSync(parseTree: Uint8Array, options?: DeparseOptions): NativeResult;
+  extractCommentsSync(query: string): NativeResult<DeparseComment[]>;
 }
 
 const addon = loadNativeAddon();
@@ -177,6 +217,54 @@ export function scanSync(query: string): ScanResult {
 
 export async function scan(query: string): Promise<ScanResult> {
   return scanSync(query);
+}
+
+/**
+ * Turn a parse tree back into SQL using PostgreSQL's own deparser.
+ *
+ * The tree is encoded to protobuf and handed to `pg_query_deparse_protobuf` —
+ * the same code path pg_query uses internally — so the output tracks the
+ * server's grammar rather than a reimplementation of it.
+ *
+ * @throws {SqlError} if the deparser rejects the tree
+ */
+export function deparseSync(parseTree: ParseResult, options?: DeparseOptions): string {
+  if (parseTree === null || parseTree === undefined) {
+    throw new Error("Parse tree cannot be null or undefined");
+  }
+  if (typeof parseTree !== "object") {
+    throw new Error(`Parse tree must be an object, got ${typeof parseTree}`);
+  }
+
+  const res = options
+    ? addon.deparseSync(encodeParseTree(parseTree), options)
+    : addon.deparseSync(encodeParseTree(parseTree));
+  checkError(res);
+  return res.result as string;
+}
+
+export async function deparse(
+  parseTree: ParseResult,
+  options?: DeparseOptions
+): Promise<string> {
+  return deparseSync(parseTree, options);
+}
+
+/**
+ * Pull the comments out of a SQL string.
+ *
+ * The parse tree doesn't carry comments, so a parse/deparse round trip drops
+ * them. Capture them here, then pass them back through
+ * `deparse(tree, { comments })` to put them back.
+ */
+export function extractCommentsSync(query: string): DeparseComment[] {
+  const res = addon.extractCommentsSync(query);
+  checkError(res);
+  return res.result as DeparseComment[];
+}
+
+export async function extractComments(query: string): Promise<DeparseComment[]> {
+  return extractCommentsSync(query);
 }
 
 export async function loadModule(): Promise<void> {
