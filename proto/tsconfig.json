@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["ES2022"],
+    "module": "node16",
+    "moduleResolution": "node16",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "sourceMap": false,
+    "declaration": true,
+    // The generated schemas carry a doc comment per field — ~160KB per version
+    // of pure ballast in the emitted JS. They survive in the .d.ts, which is
+    // where editors read them from anyway.
+    "removeComments": true,
+    "outDir": "dist/cjs",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist", "test"]
+}

@@ -166,13 +166,42 @@ npm install libpg-query        # Latest/default version
 
 The former `full/` package (`@libpg-query/parser`) has been retired. Starting with
 PostgreSQL 18, the regular `libpg-query` package (`versions/18`) ships the full API:
-`parse`, `parsePlPgSQL`, `scan`, `fingerprint`, `normalize` + sync variants.
-Versions 13–17 remain slim (parse only).
+`parse`, `parsePlPgSQL`, `scan`, `fingerprint`, `normalize`, `extractComments` +
+sync variants, plus the formatting options on `deparse`. Versions 13–17 ship
+`parse` and `deparse` only.
 
 ```bash
 npm install libpg-query@pg18   # full API
-npm install libpg-query@pg17   # parse only
+npm install libpg-query@pg17   # parse + deparse
 ```
+
+## Proto Package (@ashbyhq/pgsql-proto)
+
+Every `libpg-query` version depends on this at runtime — `deparse()` uses it to
+encode the parse tree into the protobuf that `pg_query_deparse_protobuf` expects.
+**Publish it before publishing the version packages**, or their published
+`dependencies` will point at a version that doesn't exist on npm yet.
+
+### Quick Publish
+```bash
+pnpm run build:proto
+pnpm run publish:proto
+```
+
+### What it does
+- Compiles `proto/src/` (generated schemas + per-version codecs) to `proto/dist/`,
+  emitting both CommonJS and ESM
+- Publishes `@ashbyhq/pgsql-proto` with `./v13`…`./v18` subpath exports
+
+The generated schemas under `proto/src/vNN/gen/` are committed. Regenerate them
+only after `pnpm run fetch:protos` picks up a new libpg_query release:
+
+```bash
+pnpm run generate:proto
+```
+
+Bumping this package means bumping the `@ashbyhq/pgsql-proto` dependency range in
+each `versions/*/package.json` and in `parser/package.json`.
 
 ## Parser Package (@pgsql/parser)
 

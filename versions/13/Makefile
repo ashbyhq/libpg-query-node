@@ -47,6 +47,11 @@ $(LIBPG_QUERY_DIR):
 	git clone -b $(LIBPG_QUERY_TAG) --single-branch $(LIBPG_QUERY_REPO) $(LIBPG_QUERY_DIR)
 ifdef EMSCRIPTEN
 	cd $(LIBPG_QUERY_DIR); patch -p1 < $(shell pwd)/patches/emscripten_disable_spinlocks.patch
+	# The patch adds --disable-spinlocks to PG_CONFIGURE_FLAGS, but this tag ships
+	# pre-extracted Postgres sources so extract_source never runs and the flag has
+	# no effect. Undefine the macro directly: slock_t is only typedef'd on the
+	# !HAVE_SPINLOCKS path, and without it pg_query_deparse.c fails to compile.
+	echo '#undef HAVE_SPINLOCKS' >> $(LIBPG_QUERY_DIR)/src/postgres/include/pg_config.h
 endif
 	
 $(LIBPG_QUERY_HEADER): $(LIBPG_QUERY_DIR)
@@ -65,7 +70,7 @@ ifdef EMSCRIPTEN
 		-I$(LIBPG_QUERY_DIR) \
 		-I$(LIBPG_QUERY_DIR)/vendor \
 		-L$(LIBPG_QUERY_DIR) \
-		-sEXPORTED_FUNCTIONS="['_malloc','_free','_wasm_parse_query_raw','_wasm_free_parse_result']" \
+		-sEXPORTED_FUNCTIONS="['_malloc','_free','_wasm_parse_query_raw','_wasm_free_parse_result','_wasm_deparse_protobuf_raw','_wasm_free_deparse_result']" \
 		-sEXPORTED_RUNTIME_METHODS="['lengthBytesUTF8','stringToUTF8','getValue','UTF8ToString','HEAPU8','HEAPU32']" \
 		-sEXPORT_NAME="$(WASM_MODULE_NAME)" \
 		-sENVIRONMENT="web,node,worker" \

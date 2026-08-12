@@ -5,7 +5,10 @@
  * npm run copy:templates
  */
 
+import { ParseResult } from "@pgsql/types";
 export * from "@pgsql/types";
+
+import { encodeParseTree } from '@ashbyhq/pgsql-proto/v17';
 
 // @ts-ignore
 import PgQueryModule from './libpg-query.js';
@@ -176,6 +179,31 @@ function ptrToString(ptr: number): string {
   return wasmModule.UTF8ToString(ptr);
 }
 
+/**
+ * Read a PgQueryError struct out of the WASM heap.
+ *
+ * struct { char* message; char* funcname; char* filename; int lineno; int cursorpos; char* context; }
+ */
+function readSqlError(errorPtr: number): SqlError {
+  const messagePtr = wasmModule.getValue(errorPtr, 'i32');       // offset 0
+  const funcnamePtr = wasmModule.getValue(errorPtr + 4, 'i32');  // offset 4
+  const filenamePtr = wasmModule.getValue(errorPtr + 8, 'i32');  // offset 8
+  const lineno = wasmModule.getValue(errorPtr + 12, 'i32');      // offset 12
+  const cursorpos = wasmModule.getValue(errorPtr + 16, 'i32');   // offset 16
+  const contextPtr = wasmModule.getValue(errorPtr + 20, 'i32');  // offset 20
+
+  const message = messagePtr ? wasmModule.UTF8ToString(messagePtr) : 'Unknown error';
+
+  return new SqlError(message, {
+    message,
+    cursorPosition: cursorpos > 0 ? cursorpos - 1 : 0, // Convert to 0-based
+    fileName: filenamePtr ? wasmModule.UTF8ToString(filenamePtr) : undefined,
+    functionName: funcnamePtr ? wasmModule.UTF8ToString(funcnamePtr) : undefined,
+    lineNumber: lineno > 0 ? lineno : undefined,
+    context: contextPtr ? wasmModule.UTF8ToString(contextPtr) : undefined
+  });
+}
+
 export const parse = awaitInit(async (query: string) => {
   // Pre-validation
   if (query === null || query === undefined) {
@@ -206,28 +234,7 @@ export const parse = awaitInit(async (query: string) => {
     
     // Check for error
     if (errorPtr) {
-      // Read PgQueryError struct fields
-      // struct { char* message; char* funcname; char* filename; int lineno; int cursorpos; char* context; }
-      const messagePtr = wasmModule.getValue(errorPtr, 'i32');           // offset 0
-      const funcnamePtr = wasmModule.getValue(errorPtr + 4, 'i32');      // offset 4
-      const filenamePtr = wasmModule.getValue(errorPtr + 8, 'i32');      // offset 8
-      const lineno = wasmModule.getValue(errorPtr + 12, 'i32');          // offset 12
-      const cursorpos = wasmModule.getValue(errorPtr + 16, 'i32');       // offset 16
-      const contextPtr = wasmModule.getValue(errorPtr + 20, 'i32');      // offset 20
-      
-      const message = messagePtr ? wasmModule.UTF8ToString(messagePtr) : 'Unknown error';
-      const filename = filenamePtr ? wasmModule.UTF8ToString(filenamePtr) : null;
-      
-      const errorDetails: SqlErrorDetails = {
-        message: message,
-        cursorPosition: cursorpos > 0 ? cursorpos - 1 : 0, // Convert to 0-based
-        fileName: filename || undefined,
-        functionName: funcnamePtr ? wasmModule.UTF8ToString(funcnamePtr) : undefined,
-        lineNumber: lineno > 0 ? lineno : undefined,
-        context: contextPtr ? wasmModule.UTF8ToString(contextPtr) : undefined
-      };
-      
-      throw new SqlError(message, errorDetails);
+      throw readSqlError(errorPtr);
     }
     
     if (!parseTreePtr) {
@@ -275,28 +282,7 @@ export function parseSync(query: string) {
     
     // Check for error
     if (errorPtr) {
-      // Read PgQueryError struct fields
-      // struct { char* message; char* funcname; char* filename; int lineno; int cursorpos; char* context; }
-      const messagePtr = wasmModule.getValue(errorPtr, 'i32');           // offset 0
-      const funcnamePtr = wasmModule.getValue(errorPtr + 4, 'i32');      // offset 4
-      const filenamePtr = wasmModule.getValue(errorPtr + 8, 'i32');      // offset 8
-      const lineno = wasmModule.getValue(errorPtr + 12, 'i32');          // offset 12
-      const cursorpos = wasmModule.getValue(errorPtr + 16, 'i32');       // offset 16
-      const contextPtr = wasmModule.getValue(errorPtr + 20, 'i32');      // offset 20
-      
-      const message = messagePtr ? wasmModule.UTF8ToString(messagePtr) : 'Unknown error';
-      const filename = filenamePtr ? wasmModule.UTF8ToString(filenamePtr) : null;
-      
-      const errorDetails: SqlErrorDetails = {
-        message: message,
-        cursorPosition: cursorpos > 0 ? cursorpos - 1 : 0, // Convert to 0-based
-        fileName: filename || undefined,
-        functionName: funcnamePtr ? wasmModule.UTF8ToString(funcnamePtr) : undefined,
-        lineNumber: lineno > 0 ? lineno : undefined,
-        context: contextPtr ? wasmModule.UTF8ToString(contextPtr) : undefined
-      };
-      
-      throw new SqlError(message, errorDetails);
+      throw readSqlError(errorPtr);
     }
     
     if (!parseTreePtr) {
@@ -312,4 +298,97 @@ export function parseSync(query: string) {
       wasmModule._wasm_free_parse_result(resultPtr);
     }
   }
+}
+/**
+ * A comment lifted out of a source query, positioned so it can be re-inserted
+ * when deparsing an edited tree.
+ */
+export interface DeparseComment {
+  /** Insert before the first node whose `location` is at or past this offset. */
+  matchLocation: number;
+  /** Newlines to emit before the comment. */
+  newlinesBefore: number;
+  /** Newlines to emit after the comment. */
+  newlinesAfter: number;
+  /** The comment text, including its delimiters. */
+  text: string;
+}
+
+/**
+ * Formatting options for `deparse`.
+ *
+ * libpg_query only grew `pg_query_deparse_protobuf_opts` in its 18 line, so on
+ * PostgreSQL 17 every option here is accepted and ignored — the same
+ * call works across versions. Pretty-printing needs `libpg-query@pg18`.
+ */
+export interface DeparseOptions {
+  prettyPrint?: boolean;
+  indentSize?: number;
+  maxLineLength?: number;
+  trailingNewline?: boolean;
+  commasStartOfLine?: boolean;
+  comments?: DeparseComment[];
+}
+
+/**
+ * Turn a parse tree back into SQL using PostgreSQL's own deparser.
+ *
+ * The tree is encoded to protobuf and handed to `pg_query_deparse_protobuf` —
+ * the same code path pg_query uses internally — so the output tracks the
+ * server's grammar rather than a reimplementation of it.
+ */
+function deparseImpl(parseTree: ParseResult, _options?: DeparseOptions): string {
+  if (parseTree === null || parseTree === undefined) {
+    throw new Error('Parse tree cannot be null or undefined');
+  }
+  if (typeof parseTree !== 'object') {
+    throw new Error(`Parse tree must be an object, got ${typeof parseTree}`);
+  }
+
+  const bytes = encodeParseTree(parseTree as any);
+
+  const dataPtr = wasmModule._malloc(bytes.length);
+  if (!dataPtr) {
+    throw new Error('Failed to allocate memory for parse tree');
+  }
+
+  let resultPtr = 0;
+  try {
+    wasmModule.HEAPU8.set(bytes, dataPtr);
+
+    resultPtr = wasmModule._wasm_deparse_protobuf_raw(dataPtr, bytes.length);
+    if (!resultPtr) {
+      throw new Error('Failed to deparse parse tree: memory allocation failed');
+    }
+
+    // Read the PgQueryDeparseResult struct fields
+    // struct { char* query; PgQueryError* error; }
+    const queryPtr = wasmModule.getValue(resultPtr, 'i32');     // offset 0
+    const errorPtr = wasmModule.getValue(resultPtr + 4, 'i32'); // offset 4
+
+    if (errorPtr) {
+      throw readSqlError(errorPtr);
+    }
+
+    if (!queryPtr) {
+      throw new Error('Deparse produced no output');
+    }
+
+    return wasmModule.UTF8ToString(queryPtr);
+  }
+  finally {
+    wasmModule._free(dataPtr);
+    if (resultPtr) {
+      wasmModule._wasm_free_deparse_result(resultPtr);
+    }
+  }
+}
+
+export const deparse = awaitInit(async (parseTree: ParseResult, options?: DeparseOptions): Promise<string> =>
+  deparseImpl(parseTree, options)
+);
+
+export function deparseSync(parseTree: ParseResult, options?: DeparseOptions): string {
+  ensureLoaded();
+  return deparseImpl(parseTree, options);
 }

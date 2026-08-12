@@ -6,8 +6,6 @@
 WASM_OUT_DIR := wasm
 WASM_OUT_NAME := libpg-query
 WASM_MODULE_NAME := PgQueryModule
-# LIBPG_QUERY_REPO := https://github.com/pganalyze/libpg_query.git
-# LIBPG_QUERY_TAG := 18.0.0
 LIBPG_QUERY_REPO := https://github.com/constructive-io/libpg_query.git
 LIBPG_QUERY_TAG := 18-constructive
 
@@ -64,7 +62,7 @@ ifdef EMSCRIPTEN
 		-I$(LIBPG_QUERY_DIR) \
 		-I$(LIBPG_QUERY_DIR)/vendor \
 		-L$(LIBPG_QUERY_DIR) \
-		-sEXPORTED_FUNCTIONS="['_malloc','_free','_wasm_parse_query','_wasm_parse_plpgsql','_wasm_fingerprint','_wasm_normalize_query','_wasm_scan','_wasm_parse_query_detailed','_wasm_free_detailed_result','_wasm_free_string','_wasm_parse_query_raw','_wasm_free_parse_result']" \
+		-sEXPORTED_FUNCTIONS="['_malloc','_free','_wasm_parse_query','_wasm_parse_plpgsql','_wasm_fingerprint','_wasm_normalize_query','_wasm_scan','_wasm_parse_query_detailed','_wasm_free_detailed_result','_wasm_free_string','_wasm_parse_query_raw','_wasm_free_parse_result','_wasm_deparse_protobuf_raw','_wasm_deparse_protobuf_opts_raw','_wasm_free_deparse_result','_wasm_deparse_comments_new','_wasm_deparse_comments_set','_wasm_deparse_comments_free','_wasm_deparse_comments_for_query']" \
 		-sEXPORTED_RUNTIME_METHODS="['lengthBytesUTF8','stringToUTF8','getValue','UTF8ToString','HEAPU8','HEAPU32']" \
 		-sEXPORT_NAME="$(WASM_MODULE_NAME)" \
 		-sENVIRONMENT="web,node,worker" \

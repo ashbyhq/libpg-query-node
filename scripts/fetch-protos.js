@@ -14,11 +14,20 @@ function getVersionMappings() {
     if (fs.existsSync(packagePath)) {
       const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
       if (pkg['x-publish']) {
+        const xPublish = pkg['x-publish'];
+        // Fetch from whatever we actually build against — some versions track a
+        // fork branch rather than an upstream tag, and the .proto has to match
+        // the linked library or deparse encoding breaks.
+        const repoUrl = xPublish.libpgQueryRepo ?? 'https://github.com/pganalyze/libpg_query.git';
+        const repoSlug = repoUrl.replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
+
         mappings.push({
-          pgVersion: pkg['x-publish'].pgVersion,
+          pgVersion: xPublish.pgVersion,
           packageVersion: pkg.version,
-          distTag: pkg['x-publish'].distTag,
-          libpgQueryTag: pkg['x-publish'].libpgQueryTag
+          distTag: xPublish.distTag,
+          libpgQueryTag: xPublish.libpgQueryTag,
+          repoSlug,
+          ref: xPublish.libpgQueryRef ?? xPublish.libpgQueryTag
         });
       }
     }
@@ -61,19 +70,20 @@ async function fetchProtos() {
   console.log('Fetching protobuf files for all versions...\n');
   
   for (const mapping of mappings) {
-    const { pgVersion, libpgQueryTag } = mapping;
+    const { pgVersion, repoSlug, ref } = mapping;
     const versionDir = path.join(protosDir, pgVersion);
-    
+
     // Create version directory
     if (!fs.existsSync(versionDir)) {
       fs.mkdirSync(versionDir, { recursive: true });
     }
-    
-    // Use the libpgQueryTag from the Makefile
-    const url = `https://raw.githubusercontent.com/pganalyze/libpg_query/refs/tags/${libpgQueryTag}/protobuf/pg_query.proto`;
+
+    // raw.githubusercontent.com resolves branches and tags the same way, so the
+    // ref works whether it's `17-6.1.0` or `fix/negative-int-pg15`.
+    const url = `https://raw.githubusercontent.com/${repoSlug}/${ref}/protobuf/pg_query.proto`;
     const destPath = path.join(versionDir, 'pg_query.proto');
-    
-    console.log(`Fetching protobuf for PostgreSQL ${pgVersion} with tag ${libpgQueryTag}...`);
+
+    console.log(`Fetching protobuf for PostgreSQL ${pgVersion} from ${repoSlug}@${ref}...`);
     
     try {
       await downloadFile(url, destPath);

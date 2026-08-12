@@ -35,7 +35,22 @@ Built to power [pgsql-parser](https://github.com/constructive-io/pgsql-parser), 
 ## 🚀 For Round-trip Codegen
 
 > 🎯 **Want to parse + deparse (full round trip)?**  
-> We highly recommend using [`pgsql-parser`](https://github.com/constructive-io/pgsql-parser) which leverages a pure TypeScript deparser that has been battle-tested against 23,000+ SQL statements and is built on top of libpg-query.
+> `deparse()` is built in on every version. It hands the parse tree straight to PostgreSQL's own `pg_query_deparse_protobuf`, so the SQL it emits tracks the server's grammar instead of a reimplementation of it.
+>
+> ```typescript
+> import { parse, deparse } from 'libpg-query';
+>
+> await deparse(await parse('select a,b   from   t'));
+> // SELECT a, b FROM t
+> ```
+>
+> If you need a deparser that runs without WASM, [`pgsql-parser`](https://github.com/constructive-io/pgsql-parser) has a pure TypeScript one battle-tested against 23,000+ SQL statements.
+
+> **Size note:** linking PostgreSQL's deparser adds roughly 300–430 KB to the WASM
+> binary (measured against the previously published builds: v13 +434 KB, v15 +285 KB,
+> v17 +368 KB, v18 +359 KB). It's linked unconditionally, so parse-only users pay
+> for it too.
+
 
 ### 🔀 Multi-Version Support with @pgsql/parser
 
@@ -73,10 +88,11 @@ This repository contains multiple packages to support different PostgreSQL versi
 
 | Package | Description | PostgreSQL Versions | npm Package |
 |---------|-------------|---------------------|-------------|
-| **[libpg-query](https://github.com/constructive-io/libpg-query-node/tree/main/versions)** | PostgreSQL parser (full API on PG 18+, parse-only on 13–17) | 13, 14, 15, 16, 17, 18 | [`libpg-query`](https://www.npmjs.com/package/libpg-query) |
+| **[libpg-query](https://github.com/constructive-io/libpg-query-node/tree/main/versions)** | PostgreSQL parser + deparser (rest of the full API on PG 18+) | 13, 14, 15, 16, 17, 18 | [`libpg-query`](https://www.npmjs.com/package/libpg-query) |
 | **[@pgsql/parser](https://github.com/constructive-io/libpg-query-node/tree/main/parser)** | Multi-version parser (runtime selection) | 15, 16, 17, 18 | [`@pgsql/parser`](https://www.npmjs.com/package/@pgsql/parser) |
 | **[@pgsql/types](https://github.com/constructive-io/libpg-query-node/tree/main/types)** | TypeScript type definitions | 13, 14, 15, 16, 17, 18 | [`@pgsql/types`](https://www.npmjs.com/package/@pgsql/types) |
 | **[@pgsql/enums](https://github.com/constructive-io/libpg-query-node/tree/main/enums)** | TypeScript enum definitions | 13, 14, 15, 16, 17, 18 | [`@pgsql/enums`](https://www.npmjs.com/package/@pgsql/enums) |
+| **[@ashbyhq/pgsql-proto](https://github.com/constructive-io/libpg-query-node/tree/main/proto)** | Protobuf codecs for the parse tree (used by `deparse`) | 13, 14, 15, 16, 17, 18 | [`@ashbyhq/pgsql-proto`](https://www.npmjs.com/package/@ashbyhq/pgsql-proto) |
 
 ### Version Tags
 
@@ -98,10 +114,10 @@ npm install @pgsql/enums
 
 ### Which Package Should I Use?
 
-- **Just need to parse SQL?** → Use `libpg-query` (all PG versions)
+- **Just need to parse or deparse SQL?** → Use `libpg-query` (all PG versions)
 - **Need multiple versions at runtime?** → Use `@pgsql/parser` (dynamic version selection)
 - **Need TypeScript types?** → Add `@pgsql/types` and/or `@pgsql/enums`
-- **Need fingerprint, normalize, scan, or PL/pgSQL parsing?** → Use `libpg-query@pg18` — the full API ships on PG 18+ (13–17 remain parse-only)
+- **Need fingerprint, normalize, scan, PL/pgSQL parsing, or pretty-printed deparse?** → Use `libpg-query@pg18` — the rest of the full API ships on PG 18+ (13–17 are parse + deparse)
 
 
 ## API Documentation

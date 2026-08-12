@@ -1,5 +1,6 @@
 packages:
   - 'parser'
+  - 'proto'
   - 'versions/18'
   - 'versions/17'
   - 'versions/16'
@@ -25,9 +26,10 @@ packages:
 # Most malicious releases are found and yanked well inside that window.
 minimumReleaseAge: 2880
 
-# Exempt from the wait: 6 scope glob(s), 5 first-party package(s).
+# Exempt from the wait: 7 scope glob(s), 5 first-party package(s).
 # First-party membership comes from what pyramation publishes on npm — waiting on your own release protects nothing.
 minimumReleaseAgeExclude:
+  - "@ashbyhq/*"
   - "@constructive-db/*"
   - "@constructive-io/*"
   - "@launchql/*"
@@ -42,3 +44,7 @@ minimumReleaseAgeExclude:
 
 # Transitive dependencies must come from the registry, not from git or a URL.
 blockExoticSubdeps: true
+
+# The only dependencies permitted to run install scripts.
+onlyBuiltDependencies:
+  - "@bufbuild/buf" # Dev-only. Its postinstall picks the prebuilt buf binary for the current platform out of optionalDependencies. Used by `pnpm --filter @ashbyhq/pgsql-proto generate` to regenerate the protobuf schemas; the generated output is committed, so neither CI nor consumers run this.

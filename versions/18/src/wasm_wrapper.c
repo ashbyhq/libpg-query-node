@@ -33,6 +33,35 @@ static void* safe_malloc(size_t size) {
     return ptr;
 }
 
+// Escape `len` bytes of `input` for embedding in a JSON string literal.
+// Caller owns the returned buffer. Worst case is six bytes out per byte in
+// (\u00XX), which is what the allocation assumes.
+static char* json_escape(const char* input, size_t len) {
+    char* out = safe_malloc(len * 6 + 1);
+    if (!out) return NULL;
+
+    size_t pos = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char) input[i];
+        switch (c) {
+            case '"':  out[pos++] = '\\'; out[pos++] = '"';  break;
+            case '\\': out[pos++] = '\\'; out[pos++] = '\\'; break;
+            case '\n': out[pos++] = '\\'; out[pos++] = 'n';  break;
+            case '\r': out[pos++] = '\\'; out[pos++] = 'r';  break;
+            case '\t': out[pos++] = '\\'; out[pos++] = 't';  break;
+            default:
+                if (c < 0x20) {
+                    // Other control characters are not legal raw in JSON.
+                    pos += snprintf(out + pos, 7, "\\u%04x", c);
+                } else {
+                    out[pos++] = (char) c;
+                }
+        }
+    }
+    out[pos] = '\0';
+    return out;
+}
+
 EMSCRIPTEN_KEEPALIVE
 char* wasm_parse_query(const char* input) {
     if (!validate_input(input)) {
@@ -286,7 +315,7 @@ static char* build_scan_json(PgQuery__ScanResult *scan_result, const char* origi
     }
     
     // Start building JSON
-    int pos = snprintf(json, estimated_size, "{\"version\":%d,\"tokens\":[", scan_result->version);
+    size_t pos = snprintf(json, estimated_size, "{\"version\":%d,\"tokens\":[", scan_result->version);
     
     for (size_t i = 0; i < scan_result->n_tokens; i++) {
         PgQuery__ScanToken *token = scan_result->tokens[i];
@@ -304,42 +333,33 @@ static char* build_scan_json(PgQuery__ScanResult *scan_result, const char* origi
         token_text[token_length] = '\0';
         
         // Escape token text for JSON
-        char* escaped_text = safe_malloc(token_length * 2 + 1);
+        char* escaped_text = json_escape(token_text, token_length);
         if (!escaped_text) {
             free(token_text);
             continue;
         }
-        
-        int escaped_pos = 0;
-        for (int j = 0; j < token_length; j++) {
-            char c = token_text[j];
-            if (c == '"' || c == '\\') {
-                escaped_text[escaped_pos++] = '\\';
-                escaped_text[escaped_pos++] = c;
-            } else if (c == '\n') {
-                escaped_text[escaped_pos++] = '\\';
-                escaped_text[escaped_pos++] = 'n';
-            } else if (c == '\r') {
-                escaped_text[escaped_pos++] = '\\';
-                escaped_text[escaped_pos++] = 'r';
-            } else if (c == '\t') {
-                escaped_text[escaped_pos++] = '\\';
-                escaped_text[escaped_pos++] = 't';
-            } else {
-                escaped_text[escaped_pos++] = c;
-            }
-        }
-        escaped_text[escaped_pos] = '\0';
-        
+
         // Get token type name and keyword kind name
         const char* token_name = get_token_name(token->token);
         const char* keyword_name = get_keyword_name(token->keyword_kind);
-        
+
+        // Grow before writing, not after. snprintf returns the length it
+        // *would* have written, so advancing `pos` past the end of a truncated
+        // write would leave `json + pos` pointing outside the buffer.
+        size_t needed = strlen(escaped_text) + 256;
+        while (estimated_size - pos < needed) {
+            size_t new_size = estimated_size * 2 + needed;
+            char* new_json = realloc(json, new_size);
+            if (!new_json) break;
+            json = new_json;
+            estimated_size = new_size;
+        }
+
         // Add comma if not first token
         if (i > 0) {
             pos += snprintf(json + pos, estimated_size - pos, ",");
         }
-        
+
         // Add token object to JSON
         pos += snprintf(json + pos, estimated_size - pos,
             "{\"start\":%d,\"end\":%d,\"text\":\"%s\",\"tokenType\":%d,\"tokenName\":\"%s\",\"keywordKind\":%d,\"keywordName\":\"%s\"}",
@@ -347,16 +367,8 @@ static char* build_scan_json(PgQuery__ScanResult *scan_result, const char* origi
         
         free(token_text);
         free(escaped_text);
-        
-        // Check if we're running out of space
-        if (pos >= estimated_size - 200) {
-            char* new_json = realloc(json, estimated_size * 2);
-            if (!new_json) break;
-            json = new_json;
-            estimated_size *= 2;
-        }
     }
-    
+
     // Close JSON
     snprintf(json + pos, estimated_size - pos, "]}");
     
@@ -394,6 +406,199 @@ char* wasm_scan(const char* input) {
     pg_query_free_scan_result(result);
     
     return json_result ? json_result : safe_strdup("{\"version\":0,\"tokens\":[]}");
+}
+
+
+// ---------------------------------------------------------------------------
+// Deparse
+//
+// The inverse of pg_query_parse: takes a protobuf-encoded parse tree (the JS
+// side encodes the JSON tree with @ashbyhq/pgsql-proto) and returns SQL.
+//
+// These return the PgQueryDeparseResult struct rather than a bare string so
+// the JS side can tell a deparse failure from a query that happens to start
+// with the word "error", and can surface the real PgQueryError details.
+// ---------------------------------------------------------------------------
+
+EMSCRIPTEN_KEEPALIVE
+PgQueryDeparseResult* wasm_deparse_protobuf_raw(const char* data, size_t len) {
+    if (!data || len == 0) {
+        return NULL;
+    }
+
+    PgQueryDeparseResult* result = (PgQueryDeparseResult*)safe_malloc(sizeof(PgQueryDeparseResult));
+    if (!result) {
+        return NULL;
+    }
+
+    PgQueryProtobuf parse_tree;
+    parse_tree.data = (char*) data;
+    parse_tree.len = len;
+
+    *result = pg_query_deparse_protobuf(parse_tree);
+    return result;
+}
+
+// Comment lists are built up one entry at a time from JS rather than mirroring
+// PostgresDeparseComment's layout into the JS heap, so the struct can change
+// shape without silently corrupting what we pass to the deparser.
+EMSCRIPTEN_KEEPALIVE
+PostgresDeparseComment** wasm_deparse_comments_new(size_t count) {
+    if (count == 0) {
+        return NULL;
+    }
+    PostgresDeparseComment** comments = safe_malloc(sizeof(PostgresDeparseComment*) * count);
+    if (!comments) {
+        return NULL;
+    }
+    memset(comments, 0, sizeof(PostgresDeparseComment*) * count);
+    return comments;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void wasm_deparse_comments_set(PostgresDeparseComment** comments, size_t index,
+                               int match_location, int newlines_before,
+                               int newlines_after, const char* str) {
+    if (!comments) {
+        return;
+    }
+
+    PostgresDeparseComment* comment = safe_malloc(sizeof(PostgresDeparseComment));
+    if (!comment) {
+        return;
+    }
+
+    comment->match_location = match_location;
+    comment->newlines_before_comment = newlines_before;
+    comment->newlines_after_comment = newlines_after;
+    comment->str = safe_strdup(str ? str : "");
+
+    free(comments[index]);
+    comments[index] = comment;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void wasm_deparse_comments_free(PostgresDeparseComment** comments, size_t count) {
+    if (!comments) {
+        return;
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (comments[i]) {
+            free(comments[i]->str);
+            free(comments[i]);
+        }
+    }
+    free(comments);
+}
+
+EMSCRIPTEN_KEEPALIVE
+PgQueryDeparseResult* wasm_deparse_protobuf_opts_raw(
+    const char* data, size_t len,
+    PostgresDeparseComment** comments, size_t comment_count,
+    int pretty_print, int indent_size, int max_line_length,
+    int trailing_newline, int commas_start_of_line) {
+
+    if (!data || len == 0) {
+        return NULL;
+    }
+
+    PgQueryDeparseResult* result = (PgQueryDeparseResult*)safe_malloc(sizeof(PgQueryDeparseResult));
+    if (!result) {
+        return NULL;
+    }
+
+    PgQueryProtobuf parse_tree;
+    parse_tree.data = (char*) data;
+    parse_tree.len = len;
+
+    PostgresDeparseOpts opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.comments = comments;
+    opts.comment_count = comment_count;
+    opts.pretty_print = pretty_print != 0;
+    opts.indent_size = indent_size;
+    opts.max_line_length = max_line_length;
+    opts.trailing_newline = trailing_newline != 0;
+    opts.commas_start_of_line = commas_start_of_line != 0;
+
+    *result = pg_query_deparse_protobuf_opts(parse_tree, opts);
+    return result;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void wasm_free_deparse_result(PgQueryDeparseResult* result) {
+    if (result) {
+        pg_query_free_deparse_result(*result);
+        free(result);
+    }
+}
+
+// Pull the comments out of a source query so they can be handed back to
+// wasm_deparse_protobuf_opts_raw after the tree has been edited. Returned as
+// JSON because the alternative — one accessor per struct field — is a lot of
+// exported surface for four values.
+EMSCRIPTEN_KEEPALIVE
+char* wasm_deparse_comments_for_query(const char* input) {
+    if (!validate_input(input)) {
+        return safe_strdup("{\"comments\":[]}");
+    }
+
+    PgQueryDeparseCommentsResult result = pg_query_deparse_comments_for_query(input);
+
+    if (result.error) {
+        char* escaped = json_escape(result.error->message, strlen(result.error->message));
+        pg_query_free_deparse_comments_result(result);
+        if (!escaped) {
+            return safe_strdup("{\"error\":\"Memory allocation failed\"}");
+        }
+        size_t size = strlen(escaped) + 32;
+        char* json = safe_malloc(size);
+        if (json) {
+            snprintf(json, size, "{\"error\":\"%s\"}", escaped);
+        }
+        free(escaped);
+        return json ? json : safe_strdup("{\"error\":\"Memory allocation failed\"}");
+    }
+
+    size_t capacity = 1024;
+    char* json = safe_malloc(capacity);
+    if (!json) {
+        pg_query_free_deparse_comments_result(result);
+        return safe_strdup("{\"comments\":[]}");
+    }
+
+    size_t pos = snprintf(json, capacity, "{\"comments\":[");
+
+    for (size_t i = 0; i < result.comment_count; i++) {
+        PostgresDeparseComment* comment = result.comments[i];
+        const char* text = comment->str ? comment->str : "";
+        char* escaped = json_escape(text, strlen(text));
+        if (!escaped) continue;
+
+        size_t needed = strlen(escaped) + 192;
+        while (capacity - pos < needed) {
+            size_t new_capacity = capacity * 2 + needed;
+            char* grown = realloc(json, new_capacity);
+            if (!grown) break;
+            json = grown;
+            capacity = new_capacity;
+        }
+
+        pos += snprintf(json + pos, capacity - pos,
+            "%s{\"matchLocation\":%d,\"newlinesBefore\":%d,\"newlinesAfter\":%d,\"text\":\"%s\"}",
+            i > 0 ? "," : "",
+            comment->match_location,
+            comment->newlines_before_comment,
+            comment->newlines_after_comment,
+            escaped);
+
+        free(escaped);
+    }
+
+    snprintf(json + pos, capacity - pos, "]}");
+
+    pg_query_free_deparse_comments_result(result);
+    return json;
 }
 
 EMSCRIPTEN_KEEPALIVE

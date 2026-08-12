@@ -28,7 +28,7 @@
     "wasm:rebuild": "pnpm wasm:make rebuild",
     "wasm:clean": "pnpm wasm:make clean",
     "wasm:clean-cache": "pnpm wasm:make clean-cache",
-    "test": "node --test test/parsing.test.js test/errors.test.js"
+    "test": "node --test test/parsing.test.js test/errors.test.js test/deparse.test.js"
   },
   "author": "Constructive <developers@constructive.io>",
   "license": "MIT",
@@ -38,6 +38,7 @@
   },
   "devDependencies": {},
   "dependencies": {
+    "@ashbyhq/pgsql-proto": "^0.1.0",
     "@pgsql/types": "^13.11.2"
   },
   "keywords": [

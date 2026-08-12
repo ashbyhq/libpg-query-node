@@ -8,6 +8,8 @@
 import { ParseResult } from "@pgsql/types";
 export * from "@pgsql/types";
 
+import { encodeParseTree } from '@ashbyhq/pgsql-proto/v18';
+
 export interface ScanToken {
   start: number;
   end: number;
@@ -134,10 +136,35 @@ interface WasmModule {
   _wasm_fingerprint: (queryPtr: number) => number;
   _wasm_normalize_query: (queryPtr: number) => number;
   _wasm_scan: (queryPtr: number) => number;
+  _wasm_deparse_protobuf_raw: (dataPtr: number, len: number) => number;
+  _wasm_deparse_protobuf_opts_raw: (
+    dataPtr: number,
+    len: number,
+    commentsPtr: number,
+    commentCount: number,
+    prettyPrint: number,
+    indentSize: number,
+    maxLineLength: number,
+    trailingNewline: number,
+    commasStartOfLine: number
+  ) => number;
+  _wasm_free_deparse_result: (ptr: number) => void;
+  _wasm_deparse_comments_new: (count: number) => number;
+  _wasm_deparse_comments_set: (
+    commentsPtr: number,
+    index: number,
+    matchLocation: number,
+    newlinesBefore: number,
+    newlinesAfter: number,
+    textPtr: number
+  ) => void;
+  _wasm_deparse_comments_free: (commentsPtr: number, count: number) => void;
+  _wasm_deparse_comments_for_query: (queryPtr: number) => number;
   lengthBytesUTF8: (str: string) => number;
   stringToUTF8: (str: string, ptr: number, len: number) => void;
   UTF8ToString: (ptr: number) => string;
   getValue: (ptr: number, type: string) => number;
+  HEAPU8: Uint8Array;
 }
 
 let wasmModule: WasmModule;
@@ -187,6 +214,31 @@ function ptrToString(ptr: number): string {
   return wasmModule.UTF8ToString(ptr);
 }
 
+/**
+ * Read a PgQueryError struct out of the WASM heap.
+ *
+ * struct { char* message; char* funcname; char* filename; int lineno; int cursorpos; char* context; }
+ */
+function readSqlError(errorPtr: number): SqlError {
+  const messagePtr = wasmModule.getValue(errorPtr, 'i32');       // offset 0
+  const funcnamePtr = wasmModule.getValue(errorPtr + 4, 'i32');  // offset 4
+  const filenamePtr = wasmModule.getValue(errorPtr + 8, 'i32');  // offset 8
+  const lineno = wasmModule.getValue(errorPtr + 12, 'i32');      // offset 12
+  const cursorpos = wasmModule.getValue(errorPtr + 16, 'i32');   // offset 16
+  const contextPtr = wasmModule.getValue(errorPtr + 20, 'i32');  // offset 20
+
+  const message = messagePtr ? wasmModule.UTF8ToString(messagePtr) : 'Unknown error';
+
+  return new SqlError(message, {
+    message,
+    cursorPosition: cursorpos > 0 ? cursorpos - 1 : 0, // Convert to 0-based
+    fileName: filenamePtr ? wasmModule.UTF8ToString(filenamePtr) : undefined,
+    functionName: funcnamePtr ? wasmModule.UTF8ToString(funcnamePtr) : undefined,
+    lineNumber: lineno > 0 ? lineno : undefined,
+    context: contextPtr ? wasmModule.UTF8ToString(contextPtr) : undefined
+  });
+}
+
 export const parse = awaitInit(async (query: string): Promise<ParseResult> => {
   // Input validation
   if (query === null || query === undefined) {
@@ -212,24 +264,7 @@ export const parse = awaitInit(async (query: string): Promise<ParseResult> => {
     const errorPtr = wasmModule.getValue(resultPtr + 8, 'i32');
     
     if (errorPtr) {
-      // Read PgQueryError struct
-      const messagePtr = wasmModule.getValue(errorPtr, 'i32');
-      const funcnamePtr = wasmModule.getValue(errorPtr + 4, 'i32');
-      const filenamePtr = wasmModule.getValue(errorPtr + 8, 'i32');
-      const lineno = wasmModule.getValue(errorPtr + 12, 'i32');
-      const cursorpos = wasmModule.getValue(errorPtr + 16, 'i32');
-      
-      const message = messagePtr ? wasmModule.UTF8ToString(messagePtr) : 'Unknown error';
-      const funcname = funcnamePtr ? wasmModule.UTF8ToString(funcnamePtr) : undefined;
-      const filename = filenamePtr ? wasmModule.UTF8ToString(filenamePtr) : undefined;
-      
-      throw new SqlError(message, {
-        message,
-        cursorPosition: cursorpos > 0 ? cursorpos - 1 : 0, // Convert to 0-based
-        fileName: filename,
-        functionName: funcname,
-        lineNumber: lineno > 0 ? lineno : undefined
-      });
+      throw readSqlError(errorPtr);
     }
     
     if (!parseTreePtr) {
@@ -340,24 +375,7 @@ export function parseSync(query: string): ParseResult {
     const errorPtr = wasmModule.getValue(resultPtr + 8, 'i32');
     
     if (errorPtr) {
-      // Read PgQueryError struct
-      const messagePtr = wasmModule.getValue(errorPtr, 'i32');
-      const funcnamePtr = wasmModule.getValue(errorPtr + 4, 'i32');
-      const filenamePtr = wasmModule.getValue(errorPtr + 8, 'i32');
-      const lineno = wasmModule.getValue(errorPtr + 12, 'i32');
-      const cursorpos = wasmModule.getValue(errorPtr + 16, 'i32');
-      
-      const message = messagePtr ? wasmModule.UTF8ToString(messagePtr) : 'Unknown error';
-      const funcname = funcnamePtr ? wasmModule.UTF8ToString(funcnamePtr) : undefined;
-      const filename = filenamePtr ? wasmModule.UTF8ToString(filenamePtr) : undefined;
-      
-      throw new SqlError(message, {
-        message,
-        cursorPosition: cursorpos > 0 ? cursorpos - 1 : 0, // Convert to 0-based
-        fileName: filename,
-        functionName: funcname,
-        lineNumber: lineno > 0 ? lineno : undefined
-      });
+      throw readSqlError(errorPtr);
     }
     
     if (!parseTreePtr) {
@@ -491,3 +509,215 @@ export function scanSync(query: string): ScanResult {
     }
   }
 } 
+// ---------------------------------------------------------------------------
+// Deparse
+// ---------------------------------------------------------------------------
+
+/**
+ * A comment lifted out of a source query, positioned so it can be re-inserted
+ * when deparsing an edited tree. Produced by {@link extractComments}.
+ */
+export interface DeparseComment {
+  /** Insert before the first node whose `location` is at or past this offset. */
+  matchLocation: number;
+  /** Newlines to emit before the comment. */
+  newlinesBefore: number;
+  /** Newlines to emit after the comment. */
+  newlinesAfter: number;
+  /** The comment text, including its delimiters. */
+  text: string;
+}
+
+/**
+ * Formatting options for {@link deparse}.
+ *
+ * Everything except `comments` is a pretty-print option upstream, so it only
+ * takes effect alongside `prettyPrint: true`.
+ */
+export interface DeparseOptions {
+  /** Break the statement across lines instead of emitting it on one. */
+  prettyPrint?: boolean;
+  /** Spaces per indent level. Defaults to 4. Requires `prettyPrint`. */
+  indentSize?: number;
+  /** Soft wrap width for lists of items. Defaults to 80. Requires `prettyPrint`. */
+  maxLineLength?: number;
+  /** Append a newline after the statement. Requires `prettyPrint`. */
+  trailingNewline?: boolean;
+  /** Put separating commas at the start of the line. Requires `prettyPrint`. */
+  commasStartOfLine?: boolean;
+  /** Comments to weave back in, typically from {@link extractComments}. */
+  comments?: DeparseComment[];
+}
+
+function hasDeparseOptions(options?: DeparseOptions): boolean {
+  if (!options) return false;
+  return (
+    options.prettyPrint !== undefined ||
+    options.indentSize !== undefined ||
+    options.maxLineLength !== undefined ||
+    options.trailingNewline !== undefined ||
+    options.commasStartOfLine !== undefined ||
+    (options.comments !== undefined && options.comments.length > 0)
+  );
+}
+
+/**
+ * Copy comments into WASM memory as a PostgresDeparseComment* array.
+ * Returns 0 for an empty list; the caller must free anything non-zero with
+ * `_wasm_deparse_comments_free`.
+ */
+function allocComments(comments: DeparseComment[]): number {
+  if (comments.length === 0) return 0;
+
+  const arrayPtr = wasmModule._wasm_deparse_comments_new(comments.length);
+  if (!arrayPtr) {
+    throw new Error('Failed to allocate memory for deparse comments');
+  }
+
+  comments.forEach((comment, index) => {
+    const textPtr = stringToPtr(comment.text ?? '');
+    try {
+      wasmModule._wasm_deparse_comments_set(
+        arrayPtr,
+        index,
+        comment.matchLocation ?? 0,
+        comment.newlinesBefore ?? 0,
+        comment.newlinesAfter ?? 0,
+        textPtr
+      );
+    } finally {
+      // wasm_deparse_comments_set strdups the text, so this copy is done.
+      wasmModule._free(textPtr);
+    }
+  });
+
+  return arrayPtr;
+}
+
+/**
+ * Turn a parse tree back into SQL using PostgreSQL's own deparser.
+ *
+ * The tree is encoded to protobuf and handed to `pg_query_deparse_protobuf` —
+ * the same code path pg_query uses internally — so the output tracks the
+ * server's grammar rather than a reimplementation of it.
+ */
+function deparseImpl(parseTree: ParseResult, options?: DeparseOptions): string {
+  if (parseTree === null || parseTree === undefined) {
+    throw new Error('Parse tree cannot be null or undefined');
+  }
+  if (typeof parseTree !== 'object') {
+    throw new Error(`Parse tree must be an object, got ${typeof parseTree}`);
+  }
+
+  const bytes = encodeParseTree(parseTree as any);
+
+  const dataPtr = wasmModule._malloc(bytes.length);
+  if (!dataPtr) {
+    throw new Error('Failed to allocate memory for parse tree');
+  }
+
+  let commentsPtr = 0;
+  const comments = options?.comments ?? [];
+  let resultPtr = 0;
+
+  try {
+    wasmModule.HEAPU8.set(bytes, dataPtr);
+
+    if (hasDeparseOptions(options)) {
+      commentsPtr = allocComments(comments);
+      resultPtr = wasmModule._wasm_deparse_protobuf_opts_raw(
+        dataPtr,
+        bytes.length,
+        commentsPtr,
+        comments.length,
+        options!.prettyPrint ? 1 : 0,
+        options!.indentSize ?? 4,
+        options!.maxLineLength ?? 80,
+        options!.trailingNewline ? 1 : 0,
+        options!.commasStartOfLine ? 1 : 0
+      );
+    } else {
+      resultPtr = wasmModule._wasm_deparse_protobuf_raw(dataPtr, bytes.length);
+    }
+
+    if (!resultPtr) {
+      throw new Error('Failed to deparse parse tree: memory allocation failed');
+    }
+
+    // Read the PgQueryDeparseResult struct
+    // struct { char* query; PgQueryError* error; }
+    const queryPtr = wasmModule.getValue(resultPtr, 'i32');     // offset 0
+    const errorPtr = wasmModule.getValue(resultPtr + 4, 'i32'); // offset 4
+
+    if (errorPtr) {
+      throw readSqlError(errorPtr);
+    }
+
+    if (!queryPtr) {
+      throw new Error('Deparse produced no output');
+    }
+
+    return wasmModule.UTF8ToString(queryPtr);
+  }
+  finally {
+    wasmModule._free(dataPtr);
+    if (commentsPtr) {
+      wasmModule._wasm_deparse_comments_free(commentsPtr, comments.length);
+    }
+    if (resultPtr) {
+      wasmModule._wasm_free_deparse_result(resultPtr);
+    }
+  }
+}
+
+export const deparse = awaitInit(async (parseTree: ParseResult, options?: DeparseOptions): Promise<string> =>
+  deparseImpl(parseTree, options)
+);
+
+export function deparseSync(parseTree: ParseResult, options?: DeparseOptions): string {
+  if (!wasmModule) {
+    throw new Error('WASM module not initialized. Call loadModule() first.');
+  }
+  return deparseImpl(parseTree, options);
+}
+
+/**
+ * Pull the comments out of a SQL string.
+ *
+ * The parse tree doesn't carry comments, so a parse/deparse round trip drops
+ * them. Capture them here, then pass them back through
+ * `deparse(tree, { comments })` to put them back.
+ */
+function extractCommentsImpl(query: string): DeparseComment[] {
+  const queryPtr = stringToPtr(query);
+  let resultPtr = 0;
+
+  try {
+    resultPtr = wasmModule._wasm_deparse_comments_for_query(queryPtr);
+    const parsed = JSON.parse(ptrToString(resultPtr)) as
+      { comments?: DeparseComment[]; error?: string };
+
+    if (parsed.error) {
+      throw new Error(parsed.error);
+    }
+
+    return parsed.comments ?? [];
+  }
+  finally {
+    wasmModule._free(queryPtr);
+    if (resultPtr) {
+      wasmModule._wasm_free_string(resultPtr);
+    }
+  }
+}
+
+export const extractComments = awaitInit(async (query: string): Promise<DeparseComment[]> =>
+  extractCommentsImpl(query)
+);
+
+export function extractCommentsSync(query: string): DeparseComment[] {
+  if (!wasmModule) {
+    throw new Error('WASM module not initialized. Call loadModule() first.');
+  }
+  return extractCommentsImpl(query);
+}

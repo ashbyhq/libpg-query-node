@@ -131,6 +131,22 @@ await parser.loadParser(); // or await parser.ready
 const result = parser.parseSync('SELECT 1');
 ```
 
+##### `deparse(parseTree: ParseResult, options?: DeparseOptions): Promise<string>`
+Turn a parse tree back into SQL, using PostgreSQL's own deparser.
+
+```javascript
+const parser = new Parser({ version: 17 });
+await parser.deparse(await parser.parse('select a,b   from   t'));
+// SELECT a, b FROM t
+```
+
+##### `deparseSync(parseTree: ParseResult, options?: DeparseOptions): string`
+Deparse synchronously. Requires the parser to be loaded first.
+
+`DeparseOptions` (pretty-printing, comment preservation) needs the deparser in
+PostgreSQL 18's libpg_query build; on 13–17 the options argument is accepted and
+ignored, so the same call works on every version.
+
 ##### `loadParser(): Promise<void>`
 Explicitly load the parser. Usually not needed as `parse()` loads automatically.
 
@@ -172,6 +188,8 @@ Each PostgreSQL version can be imported directly for better tree-shaking:
 Each version export provides:
 - `parse(query: string): Promise<ParseResult>` - Parse a query asynchronously
 - `parseSync(query: string): ParseResult` - Parse a query synchronously (auto-loads if needed)
+- `deparse(parseTree: ParseResult, options?): Promise<string>` - Turn a parse tree back into SQL
+- `deparseSync(parseTree: ParseResult, options?): string` - Deparse synchronously
 - `SqlError` - The error class for parsing errors
 - All TypeScript types for that PostgreSQL version
 
@@ -213,7 +231,7 @@ Built on the excellent work of several contributors:
 ## Related
 
 * [pgsql-parser](https://www.npmjs.com/package/pgsql-parser): The real PostgreSQL parser for Node.js, providing symmetric parsing and deparsing of SQL statements with actual PostgreSQL parser integration.
-* [pgsql-deparser](https://www.npmjs.com/package/pgsql-deparser): A streamlined tool designed for converting PostgreSQL ASTs back into SQL queries, focusing solely on deparser functionality to complement `pgsql-parser`.
+* [pgsql-deparser](https://www.npmjs.com/package/pgsql-deparser): A pure TypeScript deparser, for when you need AST → SQL without loading WASM.
 * [@pgsql/parser](https://www.npmjs.com/package/@pgsql/parser): Multi-version PostgreSQL parser with dynamic version selection at runtime, supporting PostgreSQL 15, 16, and 17 in a single package.
 * [@pgsql/types](https://www.npmjs.com/package/@pgsql/types): Offers TypeScript type definitions for PostgreSQL AST nodes, facilitating type-safe construction, analysis, and manipulation of ASTs.
 * [@pgsql/enums](https://www.npmjs.com/package/@pgsql/enums): Provides TypeScript enum definitions for PostgreSQL constants, enabling type-safe usage of PostgreSQL enums and constants in your applications.

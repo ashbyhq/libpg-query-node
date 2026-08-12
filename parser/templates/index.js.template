@@ -73,6 +73,36 @@ export class Parser {
       throw new Error(`Parse error in PostgreSQL ${this.version}: ${error.message}`);
     }
   }
+
+  async deparse(parseTree, options) {
+    if (!this.parser) {
+      await this.loadParser();
+    }
+    try {
+      return await this.parser.deparse(parseTree, options);
+    } catch (error) {
+      // Preserve the original error if it's a SqlError
+      if (error.name === 'SqlError') {
+        throw error;
+      }
+      throw new Error(`Deparse error in PostgreSQL ${this.version}: ${error.message}`);
+    }
+  }
+
+  deparseSync(parseTree, options) {
+    if (!this.parser) {
+      throw new Error('Parser not loaded. Call loadParser() first or use deparse() for automatic loading.');
+    }
+    try {
+      return this.parser.deparseSync(parseTree, options);
+    } catch (error) {
+      // Preserve the original error if it's a SqlError
+      if (error.name === 'SqlError') {
+        throw error;
+      }
+      throw new Error(`Deparse error in PostgreSQL ${this.version}: ${error.message}`);
+    }
+  }
 }
 
 // Utility functions

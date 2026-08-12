@@ -13,7 +13,9 @@
     "publishName": "libpg-query",
     "pgVersion": "17",
     "distTag": "pg17",
-    "libpgQueryTag": "17-6.1.0"
+    "libpgQueryTag": "17-6.1.0",
+    "libpgQueryRepo": "https://github.com/constructive-io/libpg_query.git",
+    "libpgQueryRef": "17-constructive"
   },
   "files": [
     "wasm/*"
@@ -28,7 +30,7 @@
     "wasm:rebuild": "pnpm wasm:make rebuild",
     "wasm:clean": "pnpm wasm:make clean",
     "wasm:clean-cache": "pnpm wasm:make clean-cache",
-    "test": "node --test test/parsing.test.js test/errors.test.js"
+    "test": "node --test test/parsing.test.js test/errors.test.js test/deparse.test.js"
   },
   "author": "Constructive <developers@constructive.io>",
   "license": "MIT",
@@ -38,6 +40,7 @@
   },
   "devDependencies": {},
   "dependencies": {
+    "@ashbyhq/pgsql-proto": "^0.1.0",
     "@pgsql/types": "^17.6.2"
   },
   "keywords": [

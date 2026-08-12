@@ -52,7 +52,7 @@
     "build": "npm run clean && npm run prepare",
     "build:full": "npm run clean && cross-env PARSER_BUILD_TYPE=full npm run prepare",
     "build:lts": "npm run clean && cross-env PARSER_BUILD_TYPE=lts npm run prepare",
-    "test": "node --test test/parsing.test.js test/errors.test.js"
+    "test": "node --test test/parsing.test.js test/errors.test.js test/deparse.test.js"
   },
   "keywords": [
     "postgresql",
@@ -62,6 +62,9 @@
     "multi-version"
   ],
   "license": "MIT",
+  "dependencies": {
+    "@ashbyhq/pgsql-proto": "^0.1.0"
+  },
   "devDependencies": {
     "cross-env": "^7.0.3",
     "rimraf": "^5.0.0"

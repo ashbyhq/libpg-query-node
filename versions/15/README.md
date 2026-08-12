@@ -35,7 +35,22 @@ Built to power [pgsql-parser](https://github.com/constructive-io/pgsql-parser), 
 ## 🚀 For Round-trip Codegen
 
 > 🎯 **Want to parse + deparse (full round trip)?**  
-> We highly recommend using [`pgsql-parser`](https://github.com/constructive-io/pgsql-parser) which leverages a pure TypeScript deparser that has been battle-tested against 23,000+ SQL statements and is built on top of libpg-query.
+> `deparse()` is built in on every version. It hands the parse tree straight to PostgreSQL's own `pg_query_deparse_protobuf`, so the SQL it emits tracks the server's grammar instead of a reimplementation of it.
+>
+> ```typescript
+> import { parse, deparse } from 'libpg-query';
+>
+> await deparse(await parse('select a,b   from   t'));
+> // SELECT a, b FROM t
+> ```
+>
+> If you need a deparser that runs without WASM, [`pgsql-parser`](https://github.com/constructive-io/pgsql-parser) has a pure TypeScript one battle-tested against 23,000+ SQL statements.
+
+> **Size note:** linking PostgreSQL's deparser adds roughly 300–430 KB to the WASM
+> binary (measured against the previously published builds: v13 +434 KB, v15 +285 KB,
+> v17 +368 KB, v18 +359 KB). It's linked unconditionally, so parse-only users pay
+> for it too.
+
 
 ## Installation
 
@@ -90,6 +105,37 @@ const result = parseSync('SELECT * FROM users WHERE active = true');
 ```
 
 ⚠ **Note:** If you need additional functionality like `fingerprint`, `scan`, `deparse`, or `normalize`, check out the full package (`@libpg-query/parser`) in the [./full](https://github.com/constructive-io/libpg-query-node/tree/main/full) folder of the repo.
+
+### `deparse(parseTree: ParseResult, options?: DeparseOptions): Promise<string>` / `deparseSync`
+
+Turns a parse tree back into SQL. The tree is encoded to protobuf and handed to
+PostgreSQL's own `pg_query_deparse_protobuf`, so the output follows the server's
+grammar rather than a reimplementation of it.
+
+```typescript
+import { parse, deparse } from 'libpg-query';
+
+const tree = await parse('select a,b   from   t where x=1');
+await deparse(tree);
+// SELECT a, b FROM t WHERE x = 1
+```
+
+Edit the tree in between to rewrite a query:
+
+```typescript
+const tree = await parse('SELECT a FROM t');
+tree.stmts[0].stmt.SelectStmt.fromClause[0].RangeVar.relname = 'other_table';
+await deparse(tree);
+// SELECT a FROM other_table
+```
+
+Encoding is strict: a misspelled field or a bogus enum value throws rather than
+being dropped and deparsed into quietly wrong SQL. Trees the deparser itself
+rejects throw a `SqlError` carrying the failing C function and line.
+
+⚠ **Note:** `DeparseOptions` (pretty-printing, comment preservation) needs the
+deparser in PostgreSQL 18's libpg_query build. On `pg13`–`pg17` the options
+argument is accepted and ignored, so the same call works on every version.
 
 ### Initialization
 

@@ -1,0 +1,9 @@
+version: v2
+plugins:
+  # Resolved from PATH — scripts/generate.js prepends the node_modules/.bin
+  # directory it found the buf binary in.
+  - local: protoc-gen-es
+    out: gen
+    opt:
+      - target=ts
+      - import_extension=js

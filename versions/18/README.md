@@ -35,7 +35,22 @@ Built to power [pgsql-parser](https://github.com/constructive-io/pgsql-parser), 
 ## 🚀 For Round-trip Codegen
 
 > 🎯 **Want to parse + deparse (full round trip)?**  
-> We highly recommend using [`pgsql-parser`](https://github.com/constructive-io/pgsql-parser) which leverages a pure TypeScript deparser that has been battle-tested against 23,000+ SQL statements and is built on top of libpg-query.
+> `deparse()` is built in on every version. It hands the parse tree straight to PostgreSQL's own `pg_query_deparse_protobuf`, so the SQL it emits tracks the server's grammar instead of a reimplementation of it.
+>
+> ```typescript
+> import { parse, deparse } from 'libpg-query';
+>
+> await deparse(await parse('select a,b   from   t'));
+> // SELECT a, b FROM t
+> ```
+>
+> If you need a deparser that runs without WASM, [`pgsql-parser`](https://github.com/constructive-io/pgsql-parser) has a pure TypeScript one battle-tested against 23,000+ SQL statements.
+
+> **Size note:** linking PostgreSQL's deparser adds roughly 300–430 KB to the WASM
+> binary (measured against the previously published builds: v13 +434 KB, v15 +285 KB,
+> v17 +368 KB, v18 +359 KB). It's linked unconditionally, so parse-only users pay
+> for it too.
+
 
 ## Installation
 
@@ -140,7 +155,76 @@ await normalize("SELECT * FROM users WHERE name = 'alice'");
 // SELECT * FROM users WHERE name = $1
 ```
 
-⚠ **Note:** the full API (`parsePlPgSQL`, `scan`, `fingerprint`, `normalize`) is available on `pg18`+ only; `pg13`–`pg17` builds expose `parse`/`parseSync` only.
+⚠ **Note:** `parsePlPgSQL`, `scan`, `fingerprint`, and `normalize` are available on `pg18`+ only. `pg13`–`pg17` builds expose `parse`/`parseSync` and `deparse`/`deparseSync`.
+
+### `deparse(parseTree: ParseResult, options?: DeparseOptions): Promise<string>` / `deparseSync`
+
+Turns a parse tree back into SQL. The tree is encoded to protobuf and handed to
+PostgreSQL's own `pg_query_deparse_protobuf`, so the output follows the server's
+grammar rather than a reimplementation of it.
+
+```typescript
+import { parse, deparse } from 'libpg-query';
+
+const tree = await parse('select a,b   from   t where x=1');
+await deparse(tree);
+// SELECT a, b FROM t WHERE x = 1
+```
+
+Edit the tree in between to rewrite a query:
+
+```typescript
+const tree = await parse('SELECT a FROM t');
+tree.stmts[0].stmt.SelectStmt.fromClause[0].RangeVar.relname = 'other_table';
+await deparse(tree);
+// SELECT a FROM other_table
+```
+
+Encoding is strict: a misspelled field or a bogus enum value throws rather than
+being dropped and deparsed into quietly wrong SQL. Trees the deparser itself
+rejects throw a `SqlError` carrying the failing C function and line.
+
+#### Formatting
+
+`prettyPrint` breaks the statement across lines. The remaining layout options
+are pretty-print options upstream, so they only take effect alongside it.
+
+```typescript
+await deparse(tree, { prettyPrint: true, indentSize: 2 });
+// SELECT a, b, c
+// FROM mytable
+// WHERE
+//   x = 1
+//   AND y = 2
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `prettyPrint` | `false` | Break the statement across lines |
+| `indentSize` | `4` | Spaces per indent level |
+| `maxLineLength` | `80` | Soft wrap width for lists of items |
+| `trailingNewline` | `false` | Append a newline after the statement |
+| `commasStartOfLine` | `false` | Put separating commas at the start of the line |
+
+#### `extractComments(sql: string): Promise<DeparseComment[]>` / `extractCommentsSync`
+
+Parse trees don't carry comments, so a parse/deparse round trip drops them.
+Pull them off the source first and hand them back to `deparse`:
+
+```typescript
+import { parse, deparse, extractComments } from 'libpg-query';
+
+const sql = '-- keep me\nSELECT a FROM t';
+const comments = await extractComments(sql);
+
+await deparse(await parse(sql), { comments });
+// -- keep me
+// SELECT a FROM t
+```
+
+Each comment carries `matchLocation` (the offset it anchors to),
+`newlinesBefore`, `newlinesAfter`, and `text` — filter or rewrite the list
+before passing it back.
 
 ### Initialization
 

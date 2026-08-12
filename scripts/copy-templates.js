@@ -33,10 +33,18 @@ function loadVersionConfigs() {
       const version = packageData['x-publish']?.pgVersion;
       const libpgQueryTag = packageData['x-publish']?.libpgQueryTag;
       const fullApi = packageData['x-publish']?.fullApi === true;
-      
+      // Versions built from a fork (the -constructive branches) override these;
+      // everything else tracks the upstream tag. Keeping them in package.json
+      // rather than hand-editing the generated Makefile means `copy:templates`
+      // no longer silently reverts a version back to upstream.
+      const libpgQueryRepo = packageData['x-publish']?.libpgQueryRepo
+        ?? 'https://github.com/pganalyze/libpg_query.git';
+      const libpgQueryRef = packageData['x-publish']?.libpgQueryRef ?? libpgQueryTag;
+
       if (version && libpgQueryTag) {
         configs[version] = {
-          tag: libpgQueryTag,
+          tag: libpgQueryRef,
+          repo: libpgQueryRepo,
           hasEmscriptenPatch: version === '13', // Only version 13 needs the patch
           fullApi
         };
@@ -65,8 +73,8 @@ const TEMPLATE_FILES = [
   { src: 'index.ts', dest: 'src/index.ts', header: HEADER, hasFullVariant: true }
 ];
 
-const SLIM_EXPORTED_FUNCTIONS = "['_malloc','_free','_wasm_parse_query_raw','_wasm_free_parse_result']";
-const FULL_EXPORTED_FUNCTIONS = "['_malloc','_free','_wasm_parse_query','_wasm_parse_plpgsql','_wasm_fingerprint','_wasm_normalize_query','_wasm_scan','_wasm_parse_query_detailed','_wasm_free_detailed_result','_wasm_free_string','_wasm_parse_query_raw','_wasm_free_parse_result']";
+const SLIM_EXPORTED_FUNCTIONS = "['_malloc','_free','_wasm_parse_query_raw','_wasm_free_parse_result','_wasm_deparse_protobuf_raw','_wasm_free_deparse_result']";
+const FULL_EXPORTED_FUNCTIONS = "['_malloc','_free','_wasm_parse_query','_wasm_parse_plpgsql','_wasm_fingerprint','_wasm_normalize_query','_wasm_scan','_wasm_parse_query_detailed','_wasm_free_detailed_result','_wasm_free_string','_wasm_parse_query_raw','_wasm_free_parse_result','_wasm_deparse_protobuf_raw','_wasm_deparse_protobuf_opts_raw','_wasm_free_deparse_result','_wasm_deparse_comments_new','_wasm_deparse_comments_set','_wasm_deparse_comments_free','_wasm_deparse_comments_for_query']";
 
 function copyTemplates() {
   const templatesDir = path.join(__dirname, '..', 'templates');
@@ -92,7 +100,11 @@ function copyTemplates() {
       
       // Read template content
       let content = fs.readFileSync(srcPath, 'utf8');
-      
+
+      // Each version imports its own protobuf schema (@ashbyhq/pgsql-proto/v18),
+      // so the source templates carry a placeholder for the major version.
+      content = content.replace(/{{PG_VERSION}}/g, version);
+
       // Add header if specified
       if (file.header) {
         content = file.header + content;
@@ -106,6 +118,7 @@ function copyTemplates() {
     // Process Makefile template
     const makefileTemplate = fs.readFileSync(path.join(templatesDir, 'Makefile.template'), 'utf8');
     let makefileContent = makefileTemplate.replace(/{{VERSION_TAG}}/g, config.tag);
+    makefileContent = makefileContent.replace(/{{LIBPG_QUERY_REPO}}/g, config.repo);
     makefileContent = makefileContent.replace(
       /{{EXPORTED_FUNCTIONS}}/g,
       config.fullApi ? FULL_EXPORTED_FUNCTIONS : SLIM_EXPORTED_FUNCTIONS

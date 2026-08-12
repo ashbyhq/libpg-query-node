@@ -3,7 +3,7 @@
 * DO NOT MODIFY IT BY HAND. Instead, modify the source proto file,
 * and run the pg-proto-parser generate command to regenerate this file.
 */
-import { QuerySource, SortByDir, SortByNulls, SetQuantifier, A_Expr_Kind, RoleSpecType, TableLikeOption, DefElemAction, PartitionStrategy, PartitionRangeDatumKind, RTEKind, WCOKind, GroupingSetKind, CTEMaterialize, JsonQuotes, JsonTableColumnType, SetOperation, ObjectType, DropBehavior, AlterTableType, GrantTargetType, VariableSetKind, ConstrType, ImportForeignSchemaType, RoleStmtType, FetchDirection, FunctionParameterMode, TransactionStmtKind, ViewCheckOption, DiscardMode, ReindexObjectType, AlterTSConfigType, PublicationObjSpecType, AlterPublicationAction, AlterSubscriptionType, OverridingKind, OnCommitAction, TableFuncType, ParamKind, CoercionContext, CoercionForm, BoolExprType, SubLinkType, RowCompareType, MinMaxOp, SQLValueFunctionOp, XmlExprOp, XmlOptionType, JsonEncoding, JsonFormatType, JsonConstructorType, JsonValueType, JsonWrapper, JsonBehaviorType, JsonExprOp, NullTestType, BoolTestType, MergeMatchKind, CmdType, JoinType, AggStrategy, AggSplit, SetOpCmd, SetOpStrategy, OnConflictAction, LimitOption, LockClauseStrength, LockWaitPolicy, LockTupleMode, KeywordKind, Token } from "./enums";
+import { QuerySource, SortByDir, SortByNulls, SetQuantifier, A_Expr_Kind, RoleSpecType, TableLikeOption, DefElemAction, PartitionStrategy, PartitionRangeDatumKind, RTEKind, WCOKind, GroupingSetKind, CTEMaterialize, JsonQuotes, JsonTableColumnType, SetOperation, ObjectType, DropBehavior, AlterTableType, GrantTargetType, VariableSetKind, ConstrType, ImportForeignSchemaType, RoleStmtType, FetchDirection, FunctionParameterMode, TransactionStmtKind, ViewCheckOption, DiscardMode, ReindexObjectType, AlterTSConfigType, PublicationObjSpecType, AlterPublicationAction, AlterSubscriptionType, OverridingKind, OnCommitAction, TableFuncType, ParamKind, CoercionContext, CoercionForm, BoolExprType, SubLinkType, RowCompareType, MinMaxOp, SQLValueFunctionOp, XmlExprOp, XmlOptionType, JsonEncoding, JsonFormatType, JsonConstructorType, JsonValueType, JsonWrapper, JsonBehaviorType, JsonExprOp, NullTestType, BoolTestType, MergeMatchKind, CmdType, JoinType, AggStrategy, AggSplit, SetOpCmd, SetOpStrategy, OnConflictAction, LimitOption, LockClauseStrength, LockWaitPolicy, LockTupleMode, KeywordKind, Token, Context } from "./enums";
 export type Node = {
   ParseResult: ParseResult;
 } | {
@@ -546,6 +546,14 @@ export type Node = {
   DropSubscriptionStmt: DropSubscriptionStmt;
 } | {
   ScanToken: ScanToken;
+} | {
+  SummaryResult: SummaryResult;
+} | {
+  Table: Table;
+} | {
+  Function: Function;
+} | {
+  FilterColumn: FilterColumn;
 };
 export interface ParseResult {
   version?: number;
@@ -2482,4 +2490,30 @@ export interface ScanToken {
   end?: number;
   token?: Token;
   keywordKind?: KeywordKind;
+}
+export interface SummaryResult {
+  tables?: Table[];
+  aliases?: string;
+  cteNames?: string[];
+  functions?: Function[];
+  filterColumns?: FilterColumn[];
+  statementTypes?: string[];
+  truncatedQuery?: string;
+}
+export interface Table {
+  name?: string;
+  schemaName?: string;
+  tableName?: string;
+  context?: Context;
+}
+export interface Function {
+  name?: string;
+  functionName?: string;
+  schemaName?: string;
+  context?: Context;
+}
+export interface FilterColumn {
+  schemaName?: string;
+  tableName?: string;
+  column?: string;
 }

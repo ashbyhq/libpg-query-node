@@ -17,6 +17,7 @@ maintainers:
 # Scopes we own outright, emitted as `@scope/*` globs so they also cover packages
 # published there tomorrow.
 scopes:
+  - "@ashbyhq"
   - "@constructive-io"
   - "@constructive-db"
   - "@launchql"
@@ -32,7 +33,12 @@ inventory: "@constructive-io/pnpm-policy/inventory.json"
 intersect: true
 
 # Dependencies allowed to run install scripts. The value is the reason.
-allowBuilds: {}
+allowBuilds:
+  "@bufbuild/buf": >-
+    Dev-only. Its postinstall picks the prebuilt buf binary for the current
+    platform out of optionalDependencies. Used by `pnpm --filter
+    @ashbyhq/pgsql-proto generate` to regenerate the protobuf schemas; the
+    generated output is committed, so neither CI nor consumers run this.
 
 # Third-party escape hatches. A reason is required; `until` expires the waiver so
 # `check` makes you re-justify it instead of letting it live forever.

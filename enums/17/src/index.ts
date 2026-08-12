@@ -1142,3 +1142,10 @@ export enum Token {
   MODE_PLPGSQL_ASSIGN3 = 777,
   UMINUS = 778,
 }
+export enum Context {
+  None = 0,
+  Select = 1,
+  DML = 2,
+  DDL = 3,
+  Call = 4,
+}

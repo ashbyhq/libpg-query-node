@@ -1,7 +1,7 @@
 WASM_OUT_DIR := wasm
 WASM_OUT_NAME := libpg-query
 WASM_MODULE_NAME := PgQueryModule
-LIBPG_QUERY_REPO := https://github.com/pganalyze/libpg_query.git
+LIBPG_QUERY_REPO := {{LIBPG_QUERY_REPO}}
 LIBPG_QUERY_TAG := {{VERSION_TAG}}
 
 CACHE_DIR := .cache
@@ -43,6 +43,11 @@ $(LIBPG_QUERY_DIR):
 {{#USE_EMSCRIPTEN_PATCH}}
 ifdef EMSCRIPTEN
 	cd $(LIBPG_QUERY_DIR); patch -p1 < $(shell pwd)/patches/emscripten_disable_spinlocks.patch
+	# The patch adds --disable-spinlocks to PG_CONFIGURE_FLAGS, but this tag ships
+	# pre-extracted Postgres sources so extract_source never runs and the flag has
+	# no effect. Undefine the macro directly: slock_t is only typedef'd on the
+	# !HAVE_SPINLOCKS path, and without it pg_query_deparse.c fails to compile.
+	echo '#undef HAVE_SPINLOCKS' >> $(LIBPG_QUERY_DIR)/src/postgres/include/pg_config.h
 endif
 {{/USE_EMSCRIPTEN_PATCH}}
 	

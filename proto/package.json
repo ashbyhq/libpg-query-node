@@ -1,0 +1,89 @@
+{
+  "name": "@ashbyhq/pgsql-proto",
+  "version": "0.1.0",
+  "description": "Protobuf schemas for the libpg_query parse tree, one per PostgreSQL major version",
+  "homepage": "https://github.com/constructive-io/libpg-query-node",
+  "license": "MIT",
+  "author": "Constructive <developers@constructive.io>",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/constructive-io/libpg-query-node.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/cjs/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    },
+    "./v13": {
+      "types": "./dist/cjs/v13/index.d.ts",
+      "import": "./dist/esm/v13/index.js",
+      "require": "./dist/cjs/v13/index.js"
+    },
+    "./v14": {
+      "types": "./dist/cjs/v14/index.d.ts",
+      "import": "./dist/esm/v14/index.js",
+      "require": "./dist/cjs/v14/index.js"
+    },
+    "./v15": {
+      "types": "./dist/cjs/v15/index.d.ts",
+      "import": "./dist/esm/v15/index.js",
+      "require": "./dist/cjs/v15/index.js"
+    },
+    "./v16": {
+      "types": "./dist/cjs/v16/index.d.ts",
+      "import": "./dist/esm/v16/index.js",
+      "require": "./dist/cjs/v16/index.js"
+    },
+    "./v17": {
+      "types": "./dist/cjs/v17/index.d.ts",
+      "import": "./dist/esm/v17/index.js",
+      "require": "./dist/cjs/v17/index.js"
+    },
+    "./v18": {
+      "types": "./dist/cjs/v18/index.d.ts",
+      "import": "./dist/esm/v18/index.js",
+      "require": "./dist/cjs/v18/index.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "v13": ["./dist/cjs/v13/index.d.ts"],
+      "v14": ["./dist/cjs/v14/index.d.ts"],
+      "v15": ["./dist/cjs/v15/index.d.ts"],
+      "v16": ["./dist/cjs/v16/index.d.ts"],
+      "v17": ["./dist/cjs/v17/index.d.ts"],
+      "v18": ["./dist/cjs/v18/index.d.ts"]
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "generate": "node scripts/generate.js",
+    "clean": "rimraf dist",
+    "build": "pnpm run clean && tsc && tsc -p tsconfig.esm.json && node scripts/postbuild.js",
+    "test": "node --test test/encode.test.js"
+  },
+  "keywords": [
+    "postgres",
+    "postgresql",
+    "protobuf",
+    "libpg_query",
+    "ast"
+  ],
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.13.0"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "^1.72.0",
+    "@bufbuild/protoc-gen-es": "^2.13.0",
+    "rimraf": "^5.0.0"
+  }
+}

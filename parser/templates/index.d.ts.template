@@ -43,6 +43,32 @@ export interface ParserOptions<Version extends SupportedVersion> {
   version?: Version;
 }
 
+/**
+ * A comment lifted out of a source query, positioned so it can be re-inserted
+ * when deparsing an edited tree.
+ */
+export interface DeparseComment {
+  matchLocation: number;
+  newlinesBefore: number;
+  newlinesAfter: number;
+  text: string;
+}
+
+/**
+ * Formatting options for `deparse`.
+ *
+ * Pretty-printing needs the deparser in PostgreSQL 18's libpg_query build;
+ * on 13–17 these are accepted and ignored so the same call works everywhere.
+ */
+export interface DeparseOptions {
+  prettyPrint?: boolean;
+  indentSize?: number;
+  maxLineLength?: number;
+  trailingNewline?: boolean;
+  commasStartOfLine?: boolean;
+  comments?: DeparseComment[];
+}
+
 // Main Parser class with generic version support
 export declare class Parser<Version extends SupportedVersion = ${DEFAULT_VERSION}> {
   readonly version: Version;
@@ -61,7 +87,19 @@ export declare class Parser<Version extends SupportedVersion = ${DEFAULT_VERSION
    * @throws {SqlError} if parsing fails
    */
   parseSync(query: string): ParseResult<Version>;
-  
+
+  /**
+   * Deparse a parse tree back into SQL, using PostgreSQL's own deparser.
+   * @throws {SqlError} if the tree cannot be deparsed
+   */
+  deparse(parseTree: ParseResult<Version>, options?: DeparseOptions): Promise<string>;
+
+  /**
+   * Deparse a parse tree back into SQL synchronously.
+   * @throws {SqlError} if the tree cannot be deparsed
+   */
+  deparseSync(parseTree: ParseResult<Version>, options?: DeparseOptions): string;
+
   /**
    * Load the parser module. This is called automatically on first parse,
    * but can be called manually to pre-load the WASM module.

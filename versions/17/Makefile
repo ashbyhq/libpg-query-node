@@ -6,8 +6,6 @@
 WASM_OUT_DIR := wasm
 WASM_OUT_NAME := libpg-query
 WASM_MODULE_NAME := PgQueryModule
-# LIBPG_QUERY_REPO := https://github.com/pganalyze/libpg_query.git
-# LIBPG_QUERY_TAG := 17-6.1.0
 LIBPG_QUERY_REPO := https://github.com/constructive-io/libpg_query.git
 LIBPG_QUERY_TAG := 17-constructive
 
@@ -64,7 +62,7 @@ ifdef EMSCRIPTEN
 		-I$(LIBPG_QUERY_DIR) \
 		-I$(LIBPG_QUERY_DIR)/vendor \
 		-L$(LIBPG_QUERY_DIR) \
-		-sEXPORTED_FUNCTIONS="['_malloc','_free','_wasm_parse_query_raw','_wasm_free_parse_result']" \
+		-sEXPORTED_FUNCTIONS="['_malloc','_free','_wasm_parse_query_raw','_wasm_free_parse_result','_wasm_deparse_protobuf_raw','_wasm_free_deparse_result']" \
 		-sEXPORTED_RUNTIME_METHODS="['lengthBytesUTF8','stringToUTF8','getValue','UTF8ToString','HEAPU8','HEAPU32']" \
 		-sEXPORT_NAME="$(WASM_MODULE_NAME)" \
 		-sENVIRONMENT="web,node,worker" \
