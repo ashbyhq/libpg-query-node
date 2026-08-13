@@ -234,8 +234,9 @@ remap rejects them instead.
 The alternative, [`@bufbuild/protobuf`](https://github.com/bufbuild/protobuf-es), honours
 `json_name` natively and needs no remap — it was the original implementation here. It was
 replaced because it is reflection-driven and allocates two arrays per nested message; on a
-26 MB parse tree (~1.44M messages) that measured ~10× slower. `test/proto.test.js` pins
-the current encoder byte-for-byte against golden encodings captured from it.
+26 MB parse tree (~1.44M messages) that measured ~10× slower. `test/proto.test.js` compares
+the current encoder's output byte-for-byte against bytes recorded from it, so the speedup
+cannot quietly change what libpg_query receives.
 
 The schema descriptor lives in `src/gen/pg_query.json` and is committed, so `npm ci` and
 the platform builds need no protobuf toolchain. Regenerate it when the libpg_query pin

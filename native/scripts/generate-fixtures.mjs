@@ -1,26 +1,28 @@
 #!/usr/bin/env node
 //
-// Regenerates test/fixtures/encoded-parse-trees.json — the expected protobuf
-// wire bytes for every statement in test/fixtures/corpus.js.
+// Re-records test/fixtures/encoded-parse-trees.json: for every statement in
+// test/fixtures/statements.js, the exact protobuf bytes the encoder should produce.
+// test/proto.test.js compares against that file, so it is what stops the
+// encoder silently changing what libpg_query receives.
 //
-// PROVENANCE. The committed fixtures were captured from @bufbuild/protobuf,
-// which honours json_name natively and was this package's original encoder.
-// They exist so the current encoder — which maps json_name by hand, because
-// protobufjs ignores it in its converters — is pinned against an independent
-// implementation rather than against itself.
+// WHERE THE COMMITTED BYTES CAME FROM. They were recorded from
+// @bufbuild/protobuf, which handles json_name natively and was this package's
+// original encoder. The current encoder maps json_name by hand, because
+// protobufjs ignores it. Comparing the two is only meaningful because they were
+// written independently.
 //
-// THIS SCRIPT REGENERATES FROM THE CURRENT ENCODER, so running it blesses
-// whatever that encoder does today. That is fine for the case it exists for —
-// the libpg_query pin moving to a new PG major, where the parse trees
-// legitimately change — and wrong as a way to make a failing test pass. A
-// fixture that starts failing without the pin moving means the encoder changed
-// what it puts on the wire, which changes deparse output. Investigate that
-// rather than re-recording it.
+// WHAT THIS SCRIPT DOES INSTEAD. It re-records from the *current* encoder, so
+// running it accepts whatever that encoder does today as correct. That is right
+// for the one case it exists for — the libpg_query pin moving to a new
+// PostgreSQL major, where parse trees legitimately change shape — and wrong as
+// a way to make a failing test pass. A statement that stops matching while the
+// pin has not moved means the encoder changed its output, which can change the
+// SQL deparse returns. Find out why before re-recording.
 //
-// To re-establish the independent cross-check after a pin bump:
+// To restore the independent comparison after a pin bump:
 //
 //   npm i --no-save @bufbuild/protobuf @bufbuild/protoc-gen-es @bufbuild/buf
-//   # generate the protobuf-es schema, encode the corpus with it, diff the
+//   # generate the protobuf-es schema, encode the statements with it, diff the
 //   # base64 against this file, then drop the dev dependencies again.
 //
 // Usage:
@@ -46,13 +48,13 @@ if (!process.argv.includes("--confirm")) {
 
 const { encodeParseTree } = require(join(nativeDir, "dist", "proto.js"));
 const { parseSync } = require(join(nativeDir, "dist", "index.js"));
-const corpus = require(join(nativeDir, "test", "fixtures", "corpus.js"));
+const statements = require(join(nativeDir, "test", "fixtures", "statements.js"));
 
 const encoded = {};
-for (const sql of corpus) {
+for (const sql of statements) {
   encoded[sql] = Buffer.from(encodeParseTree(parseSync(sql))).toString("base64");
 }
 
 const out = join(nativeDir, "test", "fixtures", "encoded-parse-trees.json");
 writeFileSync(out, `${JSON.stringify(encoded, null, 2)}\n`);
-console.log(`Wrote ${corpus.length} encodings to ${out}`);
+console.log(`Wrote ${statements.length} encodings to ${out}`);

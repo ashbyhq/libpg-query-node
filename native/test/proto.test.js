@@ -3,31 +3,39 @@ const assert = require("node:assert/strict");
 const query = require("../dist/index.js");
 const { encodeParseTree } = require("../dist/proto.js");
 
-const golden = require("./fixtures/encoded-parse-trees.json");
-const corpus = require("./fixtures/corpus.js");
+// For each statement below, the exact protobuf bytes the encoder is expected
+// to produce, recorded as base64.
+const expectedBytes = require("./fixtures/encoded-parse-trees.json");
+const statements = require("./fixtures/statements.js");
 
-// The encoder maps libpg_query's json_name-keyed JSON onto proto fields by hand,
-// because protobufjs's own converters ignore json_name. These fixtures are the
-// wire bytes @bufbuild/protobuf produced for the same trees — it honours
-// json_name natively and was the previous implementation here, so it serves as
-// an independent reference.
+// Where those expected bytes came from, and why comparing against them is worth
+// anything:
 //
-// Regenerating them casually defeats the point: if one of these stops matching,
-// the encoder changed what it puts on the wire, which means deparse output can
-// change too. Only regenerate against a known-good implementation.
+// The encoder maps libpg_query's json_name-keyed JSON onto proto fields by hand,
+// because protobufjs's own converters ignore json_name. @bufbuild/protobuf
+// honours json_name natively and was the previous implementation here, so these
+// bytes were recorded from it — a second, independently written encoder. Any
+// disagreement between the two shows up as a failure below.
+//
+// So re-recording them to make a failure go away throws that away. A statement
+// that stops matching means the encoder changed what it sends to libpg_query,
+// which can change the SQL that comes back out. See scripts/generate-fixtures.mjs.
 describe("Protobuf encoding", () => {
-  describe("Wire-format fixtures", () => {
-    for (const sql of corpus) {
+  describe("Encoded output matches what was recorded", () => {
+    for (const sql of statements) {
       it(`should encode identically: ${sql.slice(0, 60)}`, () => {
-        const expected = golden[sql];
-        assert.ok(expected, `no golden encoding for this statement — regenerate the fixture`);
+        const expected = expectedBytes[sql];
+        assert.ok(
+          expected,
+          "this statement has no recorded bytes — re-record them with scripts/generate-fixtures.mjs"
+        );
         const actual = Buffer.from(encodeParseTree(query.parseSync(sql)));
         assert.equal(actual.toString("base64"), expected);
       });
     }
 
-    it("should have a golden encoding for every corpus statement", () => {
-      assert.deepEqual(Object.keys(golden).sort(), [...corpus].sort());
+    it("should have recorded bytes for every statement, and no extras", () => {
+      assert.deepEqual(Object.keys(expectedBytes).sort(), [...statements].sort());
     });
   });
 

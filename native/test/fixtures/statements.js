@@ -1,10 +1,10 @@
-// The SQL corpus shared by the deparse round-trip suite and the wire-format
-// fixtures. One list rather than two: the suites assert different properties
-// (structural parse->deparse->parse equality vs exact protobuf bytes) over the
-// same statements, and maintaining two hand-written lists let them drift.
+// The SQL statements used by two test files: deparse.test.js round-trips each
+// one (parse -> deparse -> parse) and proto.test.js checks the exact protobuf
+// bytes each one encodes to. One list rather than two, because they were
+// maintained separately and had already drifted apart.
 //
-// test/fixtures/encoded-parse-trees.json is keyed by these strings, so adding
-// one here without regenerating the fixture will fail the wire-format test.
+// Adding a statement here without re-recording encoded-parse-trees.json will
+// fail proto.test.js. See scripts/generate-fixtures.mjs.
 module.exports = [
   "SELECT 1",
   "SELECT a, b FROM t WHERE x = $1 AND y > 3 ORDER BY a DESC LIMIT 10",

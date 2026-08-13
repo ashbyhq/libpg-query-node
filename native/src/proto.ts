@@ -54,9 +54,9 @@ const ParseResult = root.lookupType("pg_query.ParseResult");
 // remap. It was measured at ~10x slower on a 26 MB parse tree (2571 ms vs
 // 241 ms) because it is reflection-driven and allocates two arrays per nested
 // message — and pg_query trees are pathologically nested, ~1.44M messages for
-// that tree. test/proto.test.js pins this encoder's output byte-for-byte
-// against golden encodings captured from @bufbuild/protobuf, so the speed is
-// not bought with a change in wire output.
+// that tree. test/proto.test.js compares this encoder's output byte-for-byte
+// against bytes recorded from @bufbuild/protobuf, so the speed is not bought
+// with a change in what libpg_query receives.
 // ---------------------------------------------------------------------------
 
 /**
@@ -243,7 +243,7 @@ function remapMessage(value: unknown, type: protobuf.Type, depth: number): unkno
 
 /**
  * Encode a parse tree — the JSON that `parse()` returns — into the protobuf
- * wire format `pg_query_deparse_protobuf()` expects.
+ * bytes `pg_query_deparse_protobuf()` expects.
  *
  * Strict by design: a misspelled field or a bogus enum value throws here rather
  * than being dropped on the floor and deparsed into quietly wrong SQL.

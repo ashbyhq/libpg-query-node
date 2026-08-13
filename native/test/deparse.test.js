@@ -24,10 +24,9 @@ function removePositions(obj) {
   return result;
 }
 
-// The shared corpus, also used by the wire-format fixtures in proto.test.js.
-// Round-tripping and byte-pinning the same statements means a construct added
-// for one is covered by both.
-const ROUND_TRIP_QUERIES = require("./fixtures/corpus.js");
+// Shared with proto.test.js, which checks the exact bytes these encode to.
+// Using one list means a statement added for either check is covered by both.
+const ROUND_TRIP_QUERIES = require("./fixtures/statements.js");
 
 const PARSE_VERSION = query.parseSync("SELECT 1").version;
 
