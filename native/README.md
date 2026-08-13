@@ -143,6 +143,9 @@ dropped and deparsed into quietly wrong SQL. Trees the deparser itself rejects t
 pretty-print options upstream, so they only take effect alongside it.
 
 ```js
+const { parseSync, deparseSync } = require('@ashbyhq/libpg-query-native');
+
+const tree = parseSync('select a, b, c from mytable where x = 1 and y = 2');
 deparseSync(tree, { prettyPrint: true, indentSize: 2 });
 // SELECT a, b, c
 // FROM mytable
@@ -171,7 +174,7 @@ const { parseSync, deparseSync, extractCommentsSync } = require('@ashbyhq/libpg-
 const sql = '-- keep me\nSELECT a FROM t';
 deparseSync(parseSync(sql), { comments: extractCommentsSync(sql) });
 // -- keep me
-// SELECT a FROM t
+//  SELECT a FROM t
 ```
 
 Each comment carries `matchLocation` (the offset it anchors to), `newlinesBefore`,
