@@ -72,6 +72,24 @@ describe("Protobuf encoding", () => {
       byNumber.stmts[0].stmt.SelectStmt.op = 2; // SETOP_UNION
       assert.deepEqual(encodeParseTree(byNumber), encodeParseTree(byName));
     });
+
+    // Numbers have to be validated as strictly as names. An unmapped value is
+    // not a harmless passthrough: libpg_query's deparser takes its default
+    // branch and silently drops the construct — `SELECT a UNION SELECT b` came
+    // back as `"SELECT"`, losing the set operation and both arms.
+    for (const bogus of [999, -5, 1.5, NaN, Infinity]) {
+      it(`should reject the unmapped wire number ${bogus}`, () => {
+        const tree = query.parseSync("SELECT a UNION SELECT b");
+        tree.stmts[0].stmt.SelectStmt.op = bogus;
+        assert.throws(() => encodeParseTree(tree), /pg_query\.SetOperation/);
+      });
+    }
+
+    it("should reject an enum given as a non-string, non-number", () => {
+      const tree = query.parseSync("SELECT 1");
+      tree.stmts[0].stmt.SelectStmt.op = { nope: true };
+      assert.throws(() => encodeParseTree(tree), /pg_query\.SetOperation/);
+    });
   });
 
   // The remap walks with for..in to avoid allocating a key array per node, which

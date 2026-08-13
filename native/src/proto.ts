@@ -113,10 +113,25 @@ function unknownEnumError(enumType: protobuf.Enum, value: string): Error {
  * Convert an enum value to its wire number.
  *
  * The JSON carries enum values as their names (`"SETOP_NONE"`). Numbers are
- * also accepted, since a caller building a tree by hand may use them.
+ * also accepted, since a caller building a tree by hand may use them — but they
+ * are validated just as strictly, because an unmapped value is not a harmless
+ * passthrough here. libpg_query's deparser falls through to its default branch
+ * on one, and the result is silent: `SELECT a UNION SELECT b` with a bogus
+ * `SelectStmt.op` deparses to `"SELECT"`, dropping the set operation and both
+ * arms without raising anything.
+ *
+ * `valuesById` is keyed by wire number, so a single lookup rejects unmapped
+ * values, non-integers and NaN alike — and unlike scanning `Object.values()` it
+ * neither allocates nor walks every member on a path that runs once per enum in
+ * the tree.
  */
 function encodeEnum(enumType: protobuf.Enum, value: unknown): number {
-  if (typeof value === "number") return value;
+  if (typeof value === "number") {
+    if (enumType.valuesById[value] === undefined) {
+      throw unknownEnumError(enumType, String(value));
+    }
+    return value;
+  }
   if (typeof value === "string") {
     const resolved = enumType.values[value];
     if (resolved === undefined) throw unknownEnumError(enumType, value);
