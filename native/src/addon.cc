@@ -255,7 +255,7 @@ static Napi::Value ScanSync(const Napi::CallbackInfo &info) {
 }
 
 // The inverse of pg_query_parse. Takes the protobuf encoding of a parse tree
-// (JS encodes the JSON tree with protobuf-es — see src/proto.ts) and returns
+// (JS encodes the JSON tree with protobufjs — see src/proto.ts) and returns
 // SQL. Options mirror PostgresDeparseOpts; everything except `comments` is a
 // pretty-print option upstream, so it only applies alongside prettyPrint.
 static Napi::Value DeparseSync(const Napi::CallbackInfo &info) {

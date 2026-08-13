@@ -118,10 +118,10 @@ describe("Deparsing", () => {
     });
   });
 
-  // protobuf-es defaults recursionLimit to 100, which caps out around 92 set
-  // operations — well inside what generated SQL produces. src/proto.ts raises
-  // it to 2000, under both the JS stack ceiling and the C deparser's (which has
-  // no depth guard and segfaults if JS is enlarged past it).
+  // protobufjs defaults its recursion limit to 100, which caps out around 92
+  // set operations — well inside what generated SQL produces. src/proto.ts
+  // raises it to 2000, under both the JS stack ceiling and the C deparser's
+  // (which has no depth guard and segfaults if JS is enlarged past it).
   describe("Deep nesting", () => {
     const unionChain = (n) =>
       Array.from({ length: n }, (_, i) => `SELECT ${i}`).join(" UNION ALL ");

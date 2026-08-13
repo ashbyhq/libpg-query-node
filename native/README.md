@@ -187,8 +187,13 @@ Each comment carries `matchLocation` (the offset it anchors to), `newlinesBefore
   just a quota — `deparseRawStmt` on the C side has no depth guard of its own.
 - **Peak memory.** `pg_query_deparse_protobuf()` rebuilds the entire tree as Postgres
   `Node` structs in C, so peak allocation is proportional to tree size — on the order of
-  the parse itself. On top of that, encoding builds a transient protobuf message graph in
-  the JS heap (~7× the JSON tree) which the GC reclaims afterwards.
+  the parse itself. Encoding adds a transient renamed copy of the tree in the JS heap,
+  which the GC reclaims afterwards.
+
+Encoding costs about 465 ms of a deparse on a 26 MB parse tree. Switching from
+`@bufbuild/protobuf` to protobufjs cut that roughly 6× end to end; the trade is ~2 MB more
+in `node_modules`, since protobufjs (3.9 MB) is larger than `@bufbuild/protobuf` (1.9 MB),
+against a package tarball that shrank from 129 kB to 51 kB.
 
 The same allocator caveat as parsing applies, and more so: with the system allocator RSS
 ratchets across repeated deparses, and with jemalloc it stabilizes. Measured on a 26 MB
@@ -206,11 +211,23 @@ If you deparse large trees repeatedly, run with jemalloc.
 `pg_query_deparse_protobuf()` takes a protobuf-encoded tree, but `parse()` returns JSON.
 `pg_query.proto` maps between the two with `json_name` annotations — 1,683 of them, which
 is why `SelectStmt` and `targetList` in the JSON correspond to `select_stmt` and
-`target_list` in the schema. [protobufjs ignores
-`json_name`](https://github.com/protobufjs/protobuf.js/pull/1825), so this used to be a
-dead end; [`@bufbuild/protobuf`](https://github.com/bufbuild/protobuf-es) honours it.
+`target_list` in the schema.
 
-The generated schema lives in `src/gen/pg_query_pb.ts` and is committed, so `npm ci` and
+[protobufjs's *converters* ignore `json_name`](https://github.com/protobufjs/protobuf.js/pull/1825),
+which is what made it a dead end for this historically. But its *parser* keeps the
+annotation, exposed as `Field.jsonName`, so `src/proto.ts` drives the mapping itself off
+the descriptor — a key rename, not a fork. That hand-written step is also where strictness
+lives: protobufjs silently drops unknown keys and defaults unrecognised enum names to `0`,
+both of which would yield valid-looking SQL that doesn't match the tree you passed, so the
+remap rejects them instead.
+
+The alternative, [`@bufbuild/protobuf`](https://github.com/bufbuild/protobuf-es), honours
+`json_name` natively and needs no remap — it was the original implementation here. It was
+replaced because it is reflection-driven and allocates two arrays per nested message; on a
+26 MB parse tree (~1.44M messages) that measured ~10× slower. `test/proto.test.js` pins
+the current encoder byte-for-byte against golden encodings captured from it.
+
+The schema descriptor lives in `src/gen/pg_query.json` and is committed, so `npm ci` and
 the platform builds need no protobuf toolchain. Regenerate it when the libpg_query pin
 moves:
 
