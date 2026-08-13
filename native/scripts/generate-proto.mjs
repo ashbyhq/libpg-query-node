@@ -17,8 +17,8 @@
 //
 //   npm run generate:proto
 //
-// The schema MUST match x-upstream.libpgQueryTag in package.json. A parse tree
-// encoded against a different schema will deparse into wrong SQL or fail
+// The schema MUST match the libpg_query revision pinned in the Makefile. A parse
+// tree encoded against a different schema will deparse into wrong SQL or fail
 // outright, so this script refuses to run if protos/NN is out of sync.
 
 import { createHash } from "node:crypto";
