@@ -211,14 +211,11 @@ function remapMessage(value: unknown, type: protobuf.Type, depth: number): unkno
     throw new RangeError(`nesting exceeds ${RECURSION_LIMIT}`);
   }
 
-  // Repeated fields arrive as arrays; the element type is the field's type.
-  if (Array.isArray(value)) {
-    return value.map((element) => remapMessage(element, type, depth));
-  }
   if (value === null || typeof value !== "object") {
     return value;
   }
 
+  const node = value as Record<string, unknown>;
   const byName = jsonNameLookup(type);
   const out: Record<string, unknown> = {};
 
@@ -229,13 +226,13 @@ function remapMessage(value: unknown, type: protobuf.Type, depth: number): unkno
   // polluted prototype would otherwise make every deparse fail the unknown-key
   // check below. hasOwnProperty is called off Object.prototype because the tree
   // is caller-supplied and may shadow it.
-  for (const key in value as Record<string, unknown>) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+  for (const key in node) {
+    if (!Object.prototype.hasOwnProperty.call(node, key)) continue;
 
     const field = byName.get(key);
     if (field === undefined) throw unknownFieldError(type, key);
 
-    const raw = (value as Record<string, unknown>)[key];
+    const raw = node[key];
     out[field.name] = field.repeated && Array.isArray(raw)
       ? raw.map((element) => encodeValue(element, field, depth + 1))
       : encodeValue(raw, field, depth + 1);

@@ -226,21 +226,22 @@ if (deparseSync) {
 // protobuf schema actually shipped: encoding lives in dist/gen, so a packaging
 // mistake surfaces here as a require failure rather than in production.
 if (typeof ours.deparseSync === "function") {
-  const broken = [];
-  for (const sql of ROUND_TRIP_SQL) {
+  // Returns a describing string when the statement fails to survive, null when
+  // it round-trips. Both checks below need the same walk.
+  const nativeRoundTripFailure = (sql) => {
     try {
       const first = parseSync(sql);
       const second = parseSync(ours.deparseSync(first));
-      if (
-        JSON.stringify(stripPositions(first.stmts)) !==
+      return JSON.stringify(stripPositions(first.stmts)) !==
         JSON.stringify(stripPositions(second.stmts))
-      ) {
-        broken.push(sql);
-      }
+        ? sql
+        : null;
     } catch (e) {
-      broken.push(`${sql}\n         ${e.constructor?.name}: ${e.message}`);
+      return `${sql}\n         ${e.constructor?.name}: ${e.message}`;
     }
-  }
+  };
+
+  const broken = ROUND_TRIP_SQL.map(nativeRoundTripFailure).filter(Boolean);
   broken.length === 0
     ? ok("AST round-trips through native deparse", `${ROUND_TRIP_SQL.length} statements`)
     : fail(
@@ -251,19 +252,7 @@ if (typeof ours.deparseSync === "function") {
   // The deparser here is compiled from the same PG 18 source as the parser, so
   // the constructs section 5 warns about should survive. If one of these ever
   // fails, the two halves have drifted apart.
-  const lossy = PG18_ONLY.filter(([, sql]) => {
-    try {
-      const first = parseSync(sql);
-      const second = parseSync(ours.deparseSync(first));
-      return (
-        JSON.stringify(stripPositions(first.stmts)) !==
-        JSON.stringify(stripPositions(second.stmts))
-      );
-    } catch {
-      return true;
-    }
-  }).map(([label]) => label);
-
+  const lossy = PG18_ONLY.filter(([, sql]) => nativeRoundTripFailure(sql)).map(([label]) => label);
   lossy.length === 0
     ? ok("PG18 constructs survive native deparse", `${PG18_ONLY.length} constructs`)
     : fail("PG18 constructs survive native deparse", `lossy: ${lossy.join(", ")}`);

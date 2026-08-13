@@ -91,6 +91,32 @@ await test("loadModule is a no-op", async () => {
   await lib.loadModule();
 });
 
+// Deparse is the only API whose correctness depends on JS-side work (encoding
+// the tree to protobuf) as well as the addon, so it is worth smoke-testing on
+// every platform rather than trusting a single dev machine.
+await test("deparseSync round-trips a statement", async () => {
+  const sql = "select a,b   from   t where x = 1";
+  const out = lib.deparseSync(lib.parseSync(sql));
+  assert(out === "SELECT a, b FROM t WHERE x = 1", `unexpected deparse output: ${out}`);
+});
+
+await test("deparseSync rejects an unknown field", async () => {
+  const tree = lib.parseSync("SELECT 1");
+  tree.stmts[0].stmt.SelectStmt.notAField = true;
+  try {
+    lib.deparseSync(tree);
+    assert(false, "should have thrown");
+  } catch (e) {
+    assert(/notAField/.test(e.message), `expected an unknown-field error, got ${e.message}`);
+  }
+});
+
+await test("extractCommentsSync finds a comment", async () => {
+  const comments = lib.extractCommentsSync("-- hi\nSELECT 1");
+  assert(comments.length === 1, `expected 1 comment, got ${comments.length}`);
+  assert(comments[0].text === "-- hi", `unexpected comment text: ${comments[0].text}`);
+});
+
 console.log("");
 if (exitCode === 0) {
   console.log("All smoke tests passed.");

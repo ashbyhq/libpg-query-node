@@ -67,6 +67,15 @@ static Napi::Value ReturnResult(Napi::Env env, const std::string &result) {
   return obj;
 }
 
+// Overload for an already-built JS value (arrays, objects), so the
+// {error, result} envelope has one definition rather than one per call site.
+static Napi::Value ReturnResult(Napi::Env env, Napi::Value result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("error", env.Null());
+  obj.Set("result", result);
+  return obj;
+}
+
 // Overload for a C string owned by libpg_query. Copying it into a std::string
 // first would duplicate the whole payload for no reason — deparse output is the
 // size of the query itself.
@@ -247,11 +256,7 @@ static Napi::Value ScanSync(const Napi::CallbackInfo &info) {
 
   pg_query__scan_result__free_unpacked(scan_result, NULL);
   pg_query_free_scan_result(result);
-
-  Napi::Object obj = Napi::Object::New(env);
-  obj.Set("error", env.Null());
-  obj.Set("result", scan_obj);
-  return obj;
+  return ReturnResult(env, scan_obj);
 }
 
 // The inverse of pg_query_parse. Takes the protobuf encoding of a parse tree
@@ -277,8 +282,6 @@ static Napi::Value DeparseSync(const Napi::CallbackInfo &info) {
   parse_tree.data = reinterpret_cast<char *>(buf.Data());
   parse_tree.len = buf.ByteLength();
 
-  const bool has_opts = info.Length() > 1 && info[1].IsObject();
-
   // Owns the comment strings for the duration of the deparse call.
   std::vector<std::string> comment_texts;
   std::vector<PostgresDeparseComment> comment_storage;
@@ -286,16 +289,17 @@ static Napi::Value DeparseSync(const Napi::CallbackInfo &info) {
 
   PostgresDeparseOpts opts = {};
 
-  if (has_opts) {
+  if (info.Length() > 1 && info[1].IsObject()) {
     Napi::Object o = info[1].As<Napi::Object>();
 
+    // A missing key reads back as undefined, which is falsy and not a number,
+    // so an explicit Has() would only add a second property lookup.
     auto boolOpt = [&](const char *key) -> bool {
-      return o.Has(key) && o.Get(key).ToBoolean().Value();
+      return o.Get(key).ToBoolean().Value();
     };
     auto intOpt = [&](const char *key, int fallback) -> int {
-      return o.Has(key) && o.Get(key).IsNumber()
-                 ? o.Get(key).As<Napi::Number>().Int32Value()
-                 : fallback;
+      Napi::Value v = o.Get(key);
+      return v.IsNumber() ? v.As<Napi::Number>().Int32Value() : fallback;
     };
 
     opts.pretty_print = boolOpt("prettyPrint");
@@ -304,7 +308,7 @@ static Napi::Value DeparseSync(const Napi::CallbackInfo &info) {
     opts.trailing_newline = boolOpt("trailingNewline");
     opts.commas_start_of_line = boolOpt("commasStartOfLine");
 
-    if (o.Has("comments") && o.Get("comments").IsArray()) {
+    if (o.Get("comments").IsArray()) {
       Napi::Array arr = o.Get("comments").As<Napi::Array>();
       const uint32_t n = arr.Length();
 
@@ -323,34 +327,41 @@ static Napi::Value DeparseSync(const Napi::CallbackInfo &info) {
       comment_storage.reserve(n);
       comment_ptrs.reserve(n);
 
+      // `text` keeps its Has() check: undefined.ToString() is the string
+      // "undefined", not empty. The numeric fields have no such trap.
+      auto intProp = [](const Napi::Object &obj, const char *key) -> int {
+        Napi::Value v = obj.Get(key);
+        return v.IsNumber() ? v.As<Napi::Number>().Int32Value() : 0;
+      };
+
       for (uint32_t i = 0; i < n; i++) {
-        if (!arr.Get(i).IsObject()) continue;
-        Napi::Object c = arr.Get(i).As<Napi::Object>();
+        Napi::Value item = arr.Get(i);
+        if (!item.IsObject()) continue;
+        Napi::Object c = item.As<Napi::Object>();
 
         comment_texts.push_back(
             c.Has("text") ? c.Get("text").ToString().Utf8Value() : std::string());
 
         PostgresDeparseComment entry = {};
-        entry.match_location =
-            c.Has("matchLocation") ? c.Get("matchLocation").ToNumber().Int32Value() : 0;
-        entry.newlines_before_comment =
-            c.Has("newlinesBefore") ? c.Get("newlinesBefore").ToNumber().Int32Value() : 0;
-        entry.newlines_after_comment =
-            c.Has("newlinesAfter") ? c.Get("newlinesAfter").ToNumber().Int32Value() : 0;
+        entry.match_location = intProp(c, "matchLocation");
+        entry.newlines_before_comment = intProp(c, "newlinesBefore");
+        entry.newlines_after_comment = intProp(c, "newlinesAfter");
         entry.str = const_cast<char *>(comment_texts.back().c_str());
-        comment_storage.push_back(entry);
-      }
 
-      for (auto &entry : comment_storage) comment_ptrs.push_back(&entry);
+        // reserve() above guarantees no reallocation, so the address stays
+        // valid and the pointer can be taken here rather than in a second pass.
+        comment_storage.push_back(entry);
+        comment_ptrs.push_back(&comment_storage.back());
+      }
 
       opts.comments = comment_ptrs.data();
       opts.comment_count = comment_ptrs.size();
     }
   }
 
-  PgQueryDeparseResult result = has_opts
-                                    ? pg_query_deparse_protobuf_opts(parse_tree, opts)
-                                    : pg_query_deparse_protobuf(parse_tree);
+  // Always the _opts entry point: upstream's pg_query_deparse_protobuf() is
+  // exactly this call with a zeroed opts struct, which is what `opts = {}` is.
+  PgQueryDeparseResult result = pg_query_deparse_protobuf_opts(parse_tree, opts);
 
   if (result.error) {
     Napi::Value ret = ReturnError(env, result.error);
@@ -390,11 +401,7 @@ static Napi::Value ExtractCommentsSync(const Napi::CallbackInfo &info) {
   }
 
   pg_query_free_deparse_comments_result(result);
-
-  Napi::Object obj = Napi::Object::New(env);
-  obj.Set("error", env.Null());
-  obj.Set("result", comments);
-  return obj;
+  return ReturnResult(env, comments);
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {

@@ -28,11 +28,19 @@ import { fileURLToPath } from "node:url";
 
 import protobuf from "protobufjs";
 
+import { currentPin } from "./upstream.mjs";
+
 const nativeDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = join(nativeDir, "..");
 
-const pkg = JSON.parse(readFileSync(join(nativeDir, "package.json"), "utf8"));
-const { pgMajor, libpgQueryTag } = pkg["x-upstream"];
+// Read the pin from the Makefile via currentPin() rather than from
+// package.json's x-upstream. x-upstream is *derived* — sync-upstream-metadata.mjs
+// writes it — so a Makefile bump that hasn't been synced yet would leave this
+// guard comparing against the stale tag and passing, which is the exact failure
+// it exists to catch.
+const pin = currentPin(join(nativeDir, "Makefile"));
+const { tag: libpgQueryTag, repo } = pin;
+const pgMajor = String(pin.pgMajor); // currentPin returns a number; paths need a string
 
 const protoDir = join(repoRoot, "protos", pgMajor);
 const protoFile = join(protoDir, "pg_query.proto");
@@ -43,15 +51,16 @@ if (!existsSync(protoFile)) {
 }
 
 // Guard against silently generating from a stale schema.
+const repoSlug = repo.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
 const upstreamUrl =
-  `https://raw.githubusercontent.com/pganalyze/libpg_query/${libpgQueryTag}/protobuf/pg_query.proto`;
+  `https://raw.githubusercontent.com/${repoSlug}/${libpgQueryTag}/protobuf/pg_query.proto`;
 const local = readFileSync(protoFile);
 const remote = Buffer.from(await (await fetch(upstreamUrl)).arrayBuffer());
 const digest = (buf) => createHash("sha256").update(buf).digest("hex").slice(0, 12);
 
 if (!local.equals(remote)) {
   console.error(
-    `protos/${pgMajor}/pg_query.proto does not match libpg_query ${libpgQueryTag}.\n` +
+    `protos/${pgMajor}/pg_query.proto does not match ${repoSlug}@${libpgQueryTag}.\n` +
       `  local:  ${digest(local)}\n` +
       `  ${libpgQueryTag}: ${digest(remote)}\n` +
       `Run \`pnpm run fetch:protos\` at the repo root, then re-run this.`

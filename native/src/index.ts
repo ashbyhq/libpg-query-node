@@ -236,9 +236,7 @@ export function deparseSync(parseTree: ParseResult, options?: DeparseOptions): s
     throw new Error(`Parse tree must be an object, got ${typeof parseTree}`);
   }
 
-  const res = options
-    ? addon.deparseSync(encodeParseTree(parseTree), options)
-    : addon.deparseSync(encodeParseTree(parseTree));
+  const res = addon.deparseSync(encodeParseTree(parseTree), options);
   checkError(res);
   return res.result as string;
 }

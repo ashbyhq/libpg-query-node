@@ -4,6 +4,7 @@ const query = require("../dist/index.js");
 const { encodeParseTree } = require("../dist/proto.js");
 
 const golden = require("./fixtures/encoded-parse-trees.json");
+const corpus = require("./fixtures/corpus.js");
 
 // The encoder maps libpg_query's json_name-keyed JSON onto proto fields by hand,
 // because protobufjs's own converters ignore json_name. These fixtures are the
@@ -16,15 +17,17 @@ const golden = require("./fixtures/encoded-parse-trees.json");
 // change too. Only regenerate against a known-good implementation.
 describe("Protobuf encoding", () => {
   describe("Wire-format fixtures", () => {
-    for (const [sql, expected] of Object.entries(golden)) {
+    for (const sql of corpus) {
       it(`should encode identically: ${sql.slice(0, 60)}`, () => {
+        const expected = golden[sql];
+        assert.ok(expected, `no golden encoding for this statement — regenerate the fixture`);
         const actual = Buffer.from(encodeParseTree(query.parseSync(sql)));
         assert.equal(actual.toString("base64"), expected);
       });
     }
 
-    it("should cover the fixture corpus", () => {
-      assert.ok(Object.keys(golden).length >= 35);
+    it("should have a golden encoding for every corpus statement", () => {
+      assert.deepEqual(Object.keys(golden).sort(), [...corpus].sort());
     });
   });
 

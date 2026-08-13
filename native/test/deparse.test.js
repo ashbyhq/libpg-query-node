@@ -24,30 +24,10 @@ function removePositions(obj) {
   return result;
 }
 
-const ROUND_TRIP_QUERIES = [
-  "SELECT 1",
-  "SELECT a, b FROM t WHERE x = $1 AND y > 3 ORDER BY a DESC LIMIT 10",
-  "INSERT INTO t (a, b) VALUES (1, 'x') RETURNING *",
-  "UPDATE t SET a = 1 WHERE b = 2",
-  "DELETE FROM t WHERE a IS NULL",
-  "CREATE TABLE foo (id serial PRIMARY KEY, name text NOT NULL DEFAULT 'x')",
-  "WITH c AS (SELECT 1) SELECT * FROM c JOIN d USING (id)",
-  "SELECT 1.5, 'a'::int, ARRAY[1, 2], CASE WHEN a THEN 1 ELSE 2 END",
-  "SELECT * FROM generate_series(1, 10) g(i) WHERE i IS NOT NULL",
-  "SELECT * FROM t TABLESAMPLE bernoulli (10)",
-  "SELECT a FROM t GROUP BY GROUPING SETS ((a), (b))",
-  "SELECT count(*) FILTER (WHERE a) OVER (PARTITION BY b ORDER BY c) FROM t",
-  "CREATE VIEW v AS SELECT a FROM t WHERE b IN (SELECT c FROM u)",
-  "CREATE INDEX ON t USING gin (c jsonb_path_ops)",
-  "GRANT SELECT ON t TO r",
-  "ALTER TABLE t ADD COLUMN c int",
-  "SELECT a UNION SELECT b",
-  "SELECT -9223372036854775808",
-  "MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET a = 1",
-  "SELECT json_object('a': 1)",
-  "DO $$ BEGIN NULL; END $$",
-  "ALTER TABLE t ADD COLUMN c int; DROP TABLE t;",
-];
+// The shared corpus, also used by the wire-format fixtures in proto.test.js.
+// Round-tripping and byte-pinning the same statements means a construct added
+// for one is covered by both.
+const ROUND_TRIP_QUERIES = require("./fixtures/corpus.js");
 
 const PARSE_VERSION = query.parseSync("SELECT 1").version;
 
