@@ -85,6 +85,25 @@ describe("Protobuf encoding", () => {
       });
     }
 
+    // protobufjs builds Enum#values as Object.create(valuesById), so the reverse
+    // mapping is inherited: values["2"] resolves to the name "SETOP_UNION"
+    // rather than being absent. A numeric *string* therefore used to bypass
+    // validation — "0" and "1" deparsed `SELECT a UNION SELECT b` down to
+    // "SELECT", and "2" only worked by accident.
+    for (const numericString of ["0", "1", "2"]) {
+      it(`should reject the numeric string ${JSON.stringify(numericString)}`, () => {
+        const tree = query.parseSync("SELECT a UNION SELECT b");
+        tree.stmts[0].stmt.SelectStmt.op = numericString;
+        assert.throws(() => encodeParseTree(tree), /pg_query\.SetOperation/);
+      });
+    }
+
+    it("should reject a string naming an Enum prototype member", () => {
+      const tree = query.parseSync("SELECT 1");
+      tree.stmts[0].stmt.SelectStmt.op = "toString";
+      assert.throws(() => encodeParseTree(tree), /pg_query\.SetOperation/);
+    });
+
     it("should reject an enum given as a non-string, non-number", () => {
       const tree = query.parseSync("SELECT 1");
       tree.stmts[0].stmt.SelectStmt.op = { nope: true };

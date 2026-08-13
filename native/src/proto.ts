@@ -133,9 +133,17 @@ function encodeEnum(enumType: protobuf.Enum, value: unknown): number {
     return value;
   }
   if (typeof value === "string") {
-    const resolved = enumType.values[value];
-    if (resolved === undefined) throw unknownEnumError(enumType, value);
-    return resolved;
+    // Own property required: protobufjs builds `values` as
+    // Object.create(valuesById), so the reverse mapping is inherited and
+    // `values["2"]` resolves to the *name* "SETOP_UNION" rather than being
+    // absent. Without this check a numeric string bypasses validation and
+    // returns a string from a function declared to return a number — `"0"` and
+    // `"1"` deparsed `SELECT a UNION SELECT b` down to `"SELECT"`, silently
+    // dropping the set operation and both arms.
+    if (!Object.prototype.hasOwnProperty.call(enumType.values, value)) {
+      throw unknownEnumError(enumType, value);
+    }
+    return enumType.values[value];
   }
   throw unknownEnumError(enumType, String(value));
 }
