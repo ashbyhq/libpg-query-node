@@ -67,6 +67,24 @@ static Napi::Value ReturnResult(Napi::Env env, const std::string &result) {
   return obj;
 }
 
+// Overload for a C string owned by libpg_query. Copying it into a std::string
+// first would duplicate the whole payload for no reason — deparse output is the
+// size of the query itself.
+static Napi::Value ReturnResult(Napi::Env env, const char *result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("error", env.Null());
+  obj.Set("result", Napi::String::New(env, result ? result : ""));
+  return obj;
+}
+
+// Upper bound on DeparseOptions.comments. A JS array reports a `length` of up
+// to 2^32-1 regardless of how many elements it actually holds, and that length
+// drives both the reserve() calls and the read loop below — so a sparse array
+// with a huge length would otherwise balloon RSS and wedge the thread. Real
+// comment lists come from extractComments() and are bounded by the token count
+// of the source query; anything past this is a bug or an attack.
+static constexpr uint32_t kMaxDeparseComments = 1000000;
+
 static std::string ValidateQuery(Napi::Env env, const Napi::CallbackInfo &info) {
   if (info.Length() < 1 || !info[0].IsString()) {
     Napi::TypeError::New(env, "Expected a string argument").ThrowAsJavaScriptException();
@@ -290,6 +308,15 @@ static Napi::Value DeparseSync(const Napi::CallbackInfo &info) {
       Napi::Array arr = o.Get("comments").As<Napi::Array>();
       const uint32_t n = arr.Length();
 
+      // Bound the declared length before it reaches reserve() or the loop.
+      if (n > kMaxDeparseComments) {
+        Napi::RangeError::New(
+            env, "Too many comments: " + std::to_string(n) + " exceeds the limit of " +
+                     std::to_string(kMaxDeparseComments))
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+      }
+
       // Reserve up front: comment_storage must not reallocate while
       // comment_ptrs holds pointers into it.
       comment_texts.reserve(n);
@@ -331,9 +358,9 @@ static Napi::Value DeparseSync(const Napi::CallbackInfo &info) {
     return ret;
   }
 
-  std::string sql(result.query ? result.query : "");
+  Napi::Value ret = ReturnResult(env, result.query);
   pg_query_free_deparse_result(result);
-  return ReturnResult(env, sql);
+  return ret;
 }
 
 // Parse trees don't carry comments, so a parse/deparse round trip drops them.

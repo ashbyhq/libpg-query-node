@@ -177,6 +177,30 @@ deparseSync(parseSync(sql), { comments: extractCommentsSync(sql) });
 Each comment carries `matchLocation` (the offset it anchors to), `newlinesBefore`,
 `newlinesAfter` and `text` — filter or rewrite the list before passing it back.
 
+#### Limits and memory
+
+`deparse()` is heavier than `parse()`, in both directions:
+
+- **Nesting depth.** Encoding is recursive, and nesting grows about one level per set
+  operation. The limit is 2000, so a chain of ~2000 `UNION`/`INTERSECT`/`EXCEPT` is the
+  ceiling; past it you get a `RangeError` naming the limit. This is a safety bound, not
+  just a quota — `deparseRawStmt` on the C side has no depth guard of its own.
+- **Peak memory.** `pg_query_deparse_protobuf()` rebuilds the entire tree as Postgres
+  `Node` structs in C, so peak allocation is proportional to tree size — on the order of
+  the parse itself. On top of that, encoding builds a transient protobuf message graph in
+  the JS heap (~7× the JSON tree) which the GC reclaims afterwards.
+
+The same allocator caveat as parsing applies, and more so: with the system allocator RSS
+ratchets across repeated deparses, and with jemalloc it stabilizes. Measured on a 26 MB
+parse tree, four deparse/settle cycles:
+
+| Allocator | after #1 | #2 | #3 | #4 |
+|-----------|---------|-----|-----|-----|
+| system | 876 MB | 898 MB | 978 MB | 980 MB (still climbing) |
+| **jemalloc** | 510 MB | 568 MB | 556 MB | **562 MB (flat)** |
+
+If you deparse large trees repeatedly, run with jemalloc.
+
 #### How the tree gets to the deparser
 
 `pg_query_deparse_protobuf()` takes a protobuf-encoded tree, but `parse()` returns JSON.

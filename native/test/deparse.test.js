@@ -118,6 +118,60 @@ describe("Deparsing", () => {
     });
   });
 
+  // protobuf-es defaults recursionLimit to 100, which caps out around 92 set
+  // operations — well inside what generated SQL produces. src/proto.ts raises
+  // it to 2000, under both the JS stack ceiling and the C deparser's (which has
+  // no depth guard and segfaults if JS is enlarged past it).
+  describe("Deep nesting", () => {
+    const unionChain = (n) =>
+      Array.from({ length: n }, (_, i) => `SELECT ${i}`).join(" UNION ALL ");
+
+    for (const n of [50, 100, 500, 1500]) {
+      it(`should deparse a ${n}-way UNION chain`, () => {
+        const parsed = query.parseSync(unionChain(n));
+        const deparsed = query.deparseSync(parsed);
+        assert.equal((deparsed.match(/UNION ALL/g) || []).length, n - 1);
+      });
+    }
+
+    it("should fail with an actionable message rather than a bare RangeError", () => {
+      assert.throws(
+        () => query.deparseSync(query.parseSync(unionChain(5000))),
+        (error) => {
+          assert.ok(error instanceof RangeError);
+          assert.match(error.message, /nests too deeply/);
+          return true;
+        }
+      );
+    });
+  });
+
+  // A JS array reports `length` up to 2^32-1 no matter how many elements it
+  // holds. That length drove the native reserve() calls and the read loop, so a
+  // sparse array used to balloon RSS into the tens of GB and wedge the thread.
+  describe("Comment list bounds", () => {
+    it("should reject a sparse array with an absurd length", () => {
+      const comments = [];
+      comments.length = 2 ** 32 - 1;
+      assert.throws(
+        () => query.deparseSync(query.parseSync("SELECT 1"), { comments }),
+        (error) => {
+          assert.ok(error instanceof RangeError);
+          assert.match(error.message, /Too many comments/);
+          return true;
+        }
+      );
+    });
+
+    it("should still accept a normal comment list", () => {
+      const sql = "-- hi\nSELECT 1";
+      assert.match(
+        query.deparseSync(query.parseSync(sql), { comments: query.extractCommentsSync(sql) }),
+        /-- hi/
+      );
+    });
+  });
+
   describe("Async Deparsing", () => {
     it("should resolve to the same SQL as the sync variant", async () => {
       const parsed = await query.parse("select a from t");

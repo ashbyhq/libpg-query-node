@@ -59,14 +59,35 @@ function repairLostPrecision<T>(node: T): T {
     return node;
   }
 
+  const record = node as Record<string, unknown>;
   let copy: Record<string, unknown> | null = null;
-  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+  // for..in rather than Object.entries: this walk runs over the whole tree on
+  // every deparse and almost never changes anything, so it should not allocate
+  // a pair array per object node just to look.
+  for (const key in record) {
+    const value = record[key];
     const repaired = repairLostPrecision(value);
-    if (repaired !== value && copy === null) copy = { ...(node as object) };
+    if (repaired !== value && copy === null) copy = { ...record };
     if (copy !== null) copy[key] = repaired;
   }
   return (copy ?? node) as T;
 }
+
+/**
+ * Nesting depth allowed when reading a parse tree.
+ *
+ * protobuf-es defaults to 100, which is far too low: nesting grows roughly one
+ * level per set operation, so `SELECT ... UNION ALL ...` repeated ~92 times
+ * already exceeds it — and generated SQL reaches that easily.
+ *
+ * The limit is a real safety property, not just a nuisance. Past it, the JS
+ * stack gives out with a bare RangeError; and if the stack is enlarged so JS
+ * survives, `deparseRawStmt` on the C side has no depth guard of its own and
+ * segfaults. Measured on darwin-arm64 / Node 24: the JS stack runs out around
+ * 2050 levels and the C deparser dies around 8000, so this sits under both and
+ * fails with a message that says what happened.
+ */
+const RECURSION_LIMIT = 2000;
 
 /**
  * Encode a parse tree — the JSON that `parse()` returns — into the protobuf
@@ -84,5 +105,31 @@ function repairLostPrecision<T>(node: T): T {
  */
 export function encodeParseTree(tree: unknown): Uint8Array {
   const repaired = repairLostPrecision(tree);
-  return toBinary(ParseResultSchema, fromJson(ParseResultSchema, repaired as never));
+  try {
+    return toBinary(
+      ParseResultSchema,
+      fromJson(ParseResultSchema, repaired as never, {
+        recursionLimit: RECURSION_LIMIT,
+      })
+    );
+  } catch (error) {
+    // Two ways a deeply nested tree fails: protobuf-es hits RECURSION_LIMIT and
+    // throws a plain Error, or the JS stack gives out first and throws
+    // RangeError. Same thing to a caller, so report them the same way.
+    const tooDeep =
+      error instanceof RangeError ||
+      (error instanceof Error && /maximum recursion depth/i.test(error.message));
+
+    if (tooDeep) {
+      const wrapped = new RangeError(
+        `Parse tree nests too deeply to deparse (limit ${RECURSION_LIMIT}). ` +
+          "This usually means a very long chain of set operations (UNION/INTERSECT/EXCEPT)."
+      );
+      // Assigned rather than passed to the constructor: the `cause` option needs
+      // lib ES2022 and this package targets ES2020. Node supports it at runtime.
+      (wrapped as { cause?: unknown }).cause = error;
+      throw wrapped;
+    }
+    throw error;
+  }
 }
