@@ -206,6 +206,13 @@ parse tree, four deparse/settle cycles:
 
 If you deparse large trees repeatedly, run with jemalloc.
 
+**Untrusted input.** Like every other entry point here, `deparse()` runs synchronously on
+the calling thread and has no aggregate size budget — a large tree blocks the event loop
+for the duration (a 26 MB tree is ~500 ms, the same shape as `parse()` on the SQL that
+produced it). The bounded inputs are nesting depth and `DeparseOptions.comments`, capped
+at 1,000,000 entries. If you deparse trees derived from untrusted input, apply your own
+size limit before calling, or run it off the main thread.
+
 #### How the tree gets to the deparser
 
 `pg_query_deparse_protobuf()` takes a protobuf-encoded tree, but `parse()` returns JSON.
