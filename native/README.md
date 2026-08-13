@@ -166,7 +166,7 @@ Parse trees don't carry comments, so a parse/deparse round trip drops them. Pull
 off the source first and hand them back:
 
 ```js
-const { extractCommentsSync } = require('@ashbyhq/libpg-query-native');
+const { parseSync, deparseSync, extractCommentsSync } = require('@ashbyhq/libpg-query-native');
 
 const sql = '-- keep me\nSELECT a FROM t';
 deparseSync(parseSync(sql), { comments: extractCommentsSync(sql) });
