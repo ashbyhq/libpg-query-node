@@ -199,7 +199,16 @@ function remapMessage(value: unknown, type: protobuf.Type, depth: number): unkno
   const byName = jsonNameLookup(type);
   const out: Record<string, unknown> = {};
 
+  // for..in rather than Object.keys/entries: this walks every node of the tree,
+  // and those allocate an array per node just to iterate it. The tradeoff is
+  // that for..in also yields inherited enumerable properties, and parse trees
+  // come from JSON.parse so every node inherits from Object.prototype — a
+  // polluted prototype would otherwise make every deparse fail the unknown-key
+  // check below. hasOwnProperty is called off Object.prototype because the tree
+  // is caller-supplied and may shadow it.
   for (const key in value as Record<string, unknown>) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+
     const field = byName.get(key);
     if (field === undefined) throw unknownFieldError(type, key);
 

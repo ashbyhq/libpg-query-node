@@ -74,6 +74,42 @@ describe("Protobuf encoding", () => {
     });
   });
 
+  // The remap walks with for..in to avoid allocating a key array per node, which
+  // means it also sees inherited enumerable properties. Parse trees come from
+  // JSON.parse, so every node inherits from Object.prototype — without an
+  // own-property guard a single polluted key breaks every deparse.
+  describe("Prototype pollution", () => {
+    it("should ignore inherited enumerable properties", () => {
+      const tree = query.parseSync("SELECT 1, 'x' FROM t WHERE a = 2");
+      const expected = Buffer.from(encodeParseTree(tree)).toString("base64");
+
+      Object.prototype.pollutedKey = "surprise";
+      try {
+        assert.equal(
+          Buffer.from(encodeParseTree(tree)).toString("base64"),
+          expected,
+          "a polluted prototype changed the encoding"
+        );
+      } finally {
+        delete Object.prototype.pollutedKey;
+      }
+    });
+
+    it("should still reject an own property that is unknown", () => {
+      const tree = query.parseSync("SELECT 1");
+      Object.prototype.pollutedKey = "surprise";
+      try {
+        // Same key, but set directly on the node: that is a real unknown field
+        // and must still throw rather than being skipped along with the
+        // inherited one.
+        tree.stmts[0].stmt.SelectStmt.pollutedKey = "surprise";
+        assert.throws(() => encodeParseTree(tree), /key "pollutedKey" is unknown/);
+      } finally {
+        delete Object.prototype.pollutedKey;
+      }
+    });
+  });
+
   // json_name is explicit for 1,683 of the 1,713 fields; the other 30 fall back
   // to the proto3 lowerCamelCase default. Both paths have to resolve, or whole
   // node types silently fail to encode.
