@@ -7,6 +7,14 @@
 // fail proto.test.js. See scripts/generate-fixtures.mjs.
 module.exports = [
   "SELECT 1",
+  // Literals that collide with proto3 defaults. `String.sval` of "0" is real
+  // data, not a default — an encoder that treats "0" as one drops it and
+  // deparses `SELECT '0'` as `SELECT`.
+  "SELECT '0'",
+  "SELECT ''",
+  "SELECT 0",
+  "SELECT false",
+  "FETCH 0 FROM cur",
   "SELECT a, b FROM t WHERE x = $1 AND y > 3 ORDER BY a DESC LIMIT 10",
   "INSERT INTO t (a,b) VALUES (1,'x') RETURNING *",
   "UPDATE t SET a=1 WHERE b=2",

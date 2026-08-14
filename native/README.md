@@ -190,22 +190,21 @@ Each comment carries `matchLocation` (the offset it anchors to), `newlinesBefore
   just a quota — `deparseRawStmt` on the C side has no depth guard of its own.
 - **Peak memory.** `pg_query_deparse_protobuf()` rebuilds the entire tree as Postgres
   `Node` structs in C, so peak allocation is proportional to tree size — on the order of
-  the parse itself. Encoding adds a transient renamed copy of the tree in the JS heap,
-  which the GC reclaims afterwards.
+  the parse itself. That is now the whole cost: encoding writes bytes directly and builds
+  no intermediate copy of the tree.
 
-Encoding costs about 465 ms of a deparse on a 26 MB parse tree. Switching from
-`@bufbuild/protobuf` to protobufjs cut that roughly 6× end to end; the trade is ~2 MB more
-in `node_modules`, since protobufjs (3.9 MB) is larger than `@bufbuild/protobuf` (1.9 MB),
-against a package tarball that shrank from 129 kB to 51 kB.
+Encoding is a single pass that writes protobuf bytes straight out of the parse tree, so
+it is a small fraction of a deparse — 0.5–1.8 µs against 2–9 µs for the whole call on
+ordinary statements, ~180k deparses/sec mixed. The C deparser dominates, which is where
+the cost belongs.
 
-The same allocator caveat as parsing applies, and more so: with the system allocator RSS
-ratchets across repeated deparses, and with jemalloc it stabilizes. Measured on a 26 MB
-parse tree, four deparse/settle cycles:
+The allocator caveat from parsing still applies, but far less: on a 26 MB parse tree,
+four deparse/settle cycles.
 
 | Allocator | after #1 | #2 | #3 | #4 |
 |-----------|---------|-----|-----|-----|
-| system | 876 MB | 898 MB | 978 MB | 980 MB (still climbing) |
-| **jemalloc** | 510 MB | 568 MB | 556 MB | **562 MB (flat)** |
+| system | 568 MB | 570 MB | 571 MB | **571 MB (flat)** |
+| **jemalloc** | 227 MB | 249 MB | 249 MB | **263 MB** |
 
 If you deparse large trees repeatedly, run with jemalloc.
 

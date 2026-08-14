@@ -60,23 +60,82 @@ const ParseResult = root.lookupType("pg_query.ParseResult");
 // ---------------------------------------------------------------------------
 
 /**
- * json_name -> Field, per message type. Built on first use and cached: the
- * lookup is the hot path (every node in the tree is a `Node` oneof wrapper, so
- * this map is consulted once per node).
+ * Everything needed to write one field, resolved once per message type.
+ *
+ * The tag is the protobuf key: `(fieldNumber << 3) | wireType`. Caching it
+ * rather than recomputing per value is most of why this exists — a large parse
+ * tree writes millions of them.
  */
-const fieldsByJsonName = new Map<protobuf.Type, Map<string, protobuf.Field>>();
+interface FieldPlan {
+  field: protobuf.Field;
+  tag: number;
+  /** `(id << 3) | 2`, used for a packed repeated scalar run. */
+  packedTag: number;
+  messageType: protobuf.Type | null;
+  enumType: protobuf.Enum | null;
+  /** Proto scalar name (`string`, `int32`, …); selects the Writer method. */
+  scalar: string;
+  repeated: boolean;
+  /** Repeated scalars go out as one length-delimited run; messages do not. */
+  packed: boolean;
+  /** The proto3 default for this field. Values equal to it are not written. */
+  defaultValue: unknown;
+}
 
-function jsonNameLookup(type: protobuf.Type): Map<string, protobuf.Field> {
-  let byName = fieldsByJsonName.get(type);
-  if (byName === undefined) {
-    byName = new Map();
-    for (const field of type.fieldsArray) {
-      field.resolve();
-      byName.set(field.jsonName, field);
-    }
-    fieldsByJsonName.set(type, byName);
+const plans = new Map<protobuf.Type, Map<string, FieldPlan>>();
+
+const LENGTH_DELIMITED = new Set(["string", "bytes"]);
+const WIRE_64 = new Set(["double", "fixed64", "sfixed64"]);
+const WIRE_32 = new Set(["float", "fixed32", "sfixed32"]);
+
+function wireTypeOf(field: protobuf.Field): number {
+  if (field.resolvedType instanceof protobuf.Type) return 2;
+  if (field.resolvedType instanceof protobuf.Enum) return 0;
+  if (LENGTH_DELIMITED.has(field.type)) return 2;
+  if (WIRE_64.has(field.type)) return 1;
+  if (WIRE_32.has(field.type)) return 5;
+  return 0;
+}
+
+/**
+ * proto3 omits fields equal to their type's default, and reproducing that
+ * exactly is what keeps the output byte-identical to protobufjs's encoder.
+ *
+ * Per field type rather than one shared predicate: `""` is the default for a
+ * string but `0` is not, and 64-bit fields can arrive as the *string* `"0"`.
+ * Treating `"0"` as a default everywhere silently drops `SELECT '0'`, whose
+ * `String.sval` is the one-character string `"0"`.
+ */
+function defaultFor(field: protobuf.Field): unknown {
+  if (field.resolvedType instanceof protobuf.Enum) return 0;
+  if (field.type === "string") return "";
+  if (field.type === "bool") return false;
+  if (field.type === "bytes") return undefined;
+  return 0;
+}
+
+function planFor(type: protobuf.Type): Map<string, FieldPlan> {
+  let plan = plans.get(type);
+  if (plan !== undefined) return plan;
+
+  plan = new Map();
+  for (const field of type.fieldsArray) {
+    field.resolve();
+    const wire = wireTypeOf(field);
+    plan.set(field.jsonName, {
+      field,
+      tag: (field.id << 3) | wire,
+      packedTag: (field.id << 3) | 2,
+      messageType: field.resolvedType instanceof protobuf.Type ? field.resolvedType : null,
+      enumType: field.resolvedType instanceof protobuf.Enum ? field.resolvedType : null,
+      scalar: field.type,
+      repeated: field.repeated,
+      packed: field.repeated && wire !== 2,
+      defaultValue: defaultFor(field),
+    });
   }
-  return byName;
+  plans.set(type, plan);
+  return plan;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,36 +247,89 @@ function repair64Bit(value: number): string | number {
 const SIXTY_FOUR_BIT = new Set(["int64", "uint64", "sint64", "fixed64", "sfixed64"]);
 
 /**
- * Rewrite one JSON value into the shape protobufjs encodes from: proto field
- * names as keys, enums as numbers, 64-bit values repaired.
+ * Write one scalar with the Writer method matching its proto type.
+ *
+ * The 64-bit repair happens here because this is the only place a 64-bit value
+ * is about to be committed to bytes.
  */
-function encodeValue(value: unknown, field: protobuf.Field, depth: number): unknown {
-  if (field.resolvedType instanceof protobuf.Type) {
-    return remapMessage(value, field.resolvedType, depth);
+function writeScalar(writer: protobuf.Writer, scalar: string, value: unknown): void {
+  switch (scalar) {
+    case "string": writer.string(value as string); return;
+    case "bool": writer.bool(value as boolean); return;
+    case "int32": writer.int32(value as number); return;
+    case "uint32": writer.uint32(value as number); return;
+    case "sint32": writer.sint32(value as number); return;
+    case "double": writer.double(value as number); return;
+    case "float": writer.float(value as number); return;
+    case "fixed32": writer.fixed32(value as number); return;
+    case "sfixed32": writer.sfixed32(value as number); return;
+    case "bytes": writer.bytes(value as Uint8Array); return;
+    case "int64": writer.int64(repair(value) as never); return;
+    case "uint64": writer.uint64(repair(value) as never); return;
+    case "sint64": writer.sint64(repair(value) as never); return;
+    case "fixed64": writer.fixed64(repair(value) as never); return;
+    case "sfixed64": writer.sfixed64(repair(value) as never); return;
+    default: throw new Error(`cannot encode unsupported scalar type "${scalar}"`);
   }
-  if (field.resolvedType instanceof protobuf.Enum) {
-    return encodeEnum(field.resolvedType, value);
-  }
-  if (typeof value === "number" && SIXTY_FOUR_BIT.has(field.type)) {
-    return repair64Bit(value);
-  }
-  return value;
 }
 
-function remapMessage(value: unknown, type: protobuf.Type, depth: number): unknown {
+function repair(value: unknown): unknown {
+  return typeof value === "number" ? repair64Bit(value) : value;
+}
+
+/** Write a single (non-repeated) value, tag included. */
+function writeValue(
+  writer: protobuf.Writer,
+  plan: FieldPlan,
+  value: unknown,
+  depth: number
+): void {
+  if (plan.messageType !== null) {
+    // Length-delimited: fork() starts a nested buffer, ldelim() closes it and
+    // prefixes the length. A submessage is written even when empty, because
+    // its presence is meaningful — `{"Integer":{}}` is the integer zero.
+    writer.uint32(plan.tag).fork();
+    writeMessage(writer, value, plan.messageType, depth);
+    writer.ldelim();
+    return;
+  }
+
+  if (plan.enumType !== null) {
+    const wire = encodeEnum(plan.enumType, value);
+    if (wire === 0) return; // proto3 default
+    writer.uint32(plan.tag).int32(wire);
+    return;
+  }
+
+  if (value === null || value === undefined || value === plan.defaultValue) return;
+  writer.uint32(plan.tag);
+  writeScalar(writer, plan.scalar, value);
+}
+
+/**
+ * Walk one message, writing it straight into `writer`.
+ *
+ * This replaces two passes — building a renamed copy of the tree, then handing
+ * that to protobufjs's generated encoder — with one. The generated encoder is
+ * what made that expensive: `Node.encode` is 553 lines with a branch per oneof
+ * member, and every value in a pg_query tree is wrapped in a `Node`, so it is
+ * the hot path. Writing the one field we know is set skips all of it.
+ */
+function writeMessage(
+  writer: protobuf.Writer,
+  value: unknown,
+  type: protobuf.Type,
+  depth: number
+): void {
   // Checked here rather than in a pre-pass: this is the only recursion, so it
   // is also the only place depth can be measured without a second traversal.
   if (depth > RECURSION_LIMIT) {
     throw new RangeError(`nesting exceeds ${RECURSION_LIMIT}`);
   }
-
-  if (value === null || typeof value !== "object") {
-    return value;
-  }
+  if (value === null || typeof value !== "object") return;
 
   const node = value as Record<string, unknown>;
-  const byName = jsonNameLookup(type);
-  const out: Record<string, unknown> = {};
+  const plan = planFor(type);
 
   // for..in rather than Object.keys/entries: this walks every node of the tree,
   // and those allocate an array per node just to iterate it. The tradeoff is
@@ -229,16 +341,26 @@ function remapMessage(value: unknown, type: protobuf.Type, depth: number): unkno
   for (const key in node) {
     if (!Object.prototype.hasOwnProperty.call(node, key)) continue;
 
-    const field = byName.get(key);
-    if (field === undefined) throw unknownFieldError(type, key);
+    const entry = plan.get(key);
+    if (entry === undefined) throw unknownFieldError(type, key);
 
     const raw = node[key];
-    out[field.name] = field.repeated && Array.isArray(raw)
-      ? raw.map((element) => encodeValue(element, field, depth + 1))
-      : encodeValue(raw, field, depth + 1);
-  }
 
-  return out;
+    if (entry.repeated && Array.isArray(raw)) {
+      if (entry.packed) {
+        // Repeated scalars go out as one length-delimited run, not tag-per-value.
+        if (raw.length === 0) continue;
+        writer.uint32(entry.packedTag).fork();
+        for (const element of raw) writeScalar(writer, entry.scalar, element);
+        writer.ldelim();
+      } else {
+        for (const element of raw) writeValue(writer, entry, element, depth + 1);
+      }
+      continue;
+    }
+
+    writeValue(writer, entry, raw, depth + 1);
+  }
 }
 
 /**
@@ -253,18 +375,12 @@ function remapMessage(value: unknown, type: protobuf.Type, depth: number): unkno
  */
 export function encodeParseTree(tree: unknown): Uint8Array {
   try {
-    const remapped = remapMessage(tree, ParseResult, 0) as Record<string, unknown>;
-    // Straight to encode(), without fromObject(). fromObject exists to turn
-    // JSON-shaped input into runtime form — proto field names, enums as numbers,
-    // 64-bit values protobufjs can write — and the remap above has already done
-    // exactly that. Running it anyway re-walks and re-allocates the whole graph
-    // to reach the same state, which on a pg_query tree is the single largest
-    // cost in this function: it is 3-4x of the total on typical statements.
-    // encode() accepts a plain object, and proto.test.js pins the bytes.
-    return ParseResult.encode(remapped).finish();
+    const writer = protobuf.Writer.create();
+    writeMessage(writer, tree, ParseResult, 0);
+    return writer.finish();
   } catch (error) {
     // Either RECURSION_LIMIT tripped, or the JS stack gave out first inside the
-    // remap. Same thing to a caller, so report them the same way.
+    // walk. Same thing to a caller, so report them the same way.
     if (error instanceof RangeError) {
       const wrapped = new RangeError(
         `Parse tree nests too deeply to deparse (limit ${RECURSION_LIMIT}). ` +
