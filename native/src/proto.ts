@@ -254,7 +254,14 @@ function remapMessage(value: unknown, type: protobuf.Type, depth: number): unkno
 export function encodeParseTree(tree: unknown): Uint8Array {
   try {
     const remapped = remapMessage(tree, ParseResult, 0) as Record<string, unknown>;
-    return ParseResult.encode(ParseResult.fromObject(remapped)).finish();
+    // Straight to encode(), without fromObject(). fromObject exists to turn
+    // JSON-shaped input into runtime form — proto field names, enums as numbers,
+    // 64-bit values protobufjs can write — and the remap above has already done
+    // exactly that. Running it anyway re-walks and re-allocates the whole graph
+    // to reach the same state, which on a pg_query tree is the single largest
+    // cost in this function: it is 3-4x of the total on typical statements.
+    // encode() accepts a plain object, and proto.test.js pins the bytes.
+    return ParseResult.encode(remapped).finish();
   } catch (error) {
     // Either RECURSION_LIMIT tripped, or the JS stack gave out first inside the
     // remap. Same thing to a caller, so report them the same way.
