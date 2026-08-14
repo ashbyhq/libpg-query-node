@@ -193,20 +193,25 @@ Each comment carries `matchLocation` (the offset it anchors to), `newlinesBefore
   the parse itself. That is now the whole cost: encoding writes bytes directly and builds
   no intermediate copy of the tree.
 
-Encoding is a single pass that writes protobuf bytes straight out of the parse tree, so
-it is a small fraction of a deparse — 0.5–1.8 µs against 2–9 µs for the whole call on
-ordinary statements, ~180k deparses/sec mixed. The C deparser dominates, which is where
-the cost belongs.
+Encoding is a single pass that writes protobuf bytes straight out of the parse tree —
+0.3–2.5 µs of a 1.4–9.6 µs deparse on ordinary statements. The other side of the call is
+patched: `patches/protobuf_unpack_palloc.patch` makes libpg_query unpack the protobuf
+into its memory context instead of malloc and skip protobuf-c's free pass, whose
+per-message walk of the 271-field `Node` descriptor was ~80% of the C time. That patch
+roughly halved a deparse; end to end this now runs within 1.0–1.3× of `pgsql-deparser`
+on a parse→edit→deparse flow, at parity on wide statements.
 
-The allocator caveat from parsing still applies, but far less: on a 26 MB parse tree,
-four deparse/settle cycles.
+The allocator caveat from parsing still applies. On a 26 MB parse tree, four
+deparse/settle cycles:
 
 | Allocator | after #1 | #2 | #3 | #4 |
 |-----------|---------|-----|-----|-----|
-| system | 568 MB | 570 MB | 571 MB | **571 MB (flat)** |
-| **jemalloc** | 227 MB | 249 MB | 249 MB | **263 MB** |
+| system | 704 MB | 710 MB | 711 MB | **712 MB (flat)** |
+| **jemalloc** | 230 MB | 235 MB | 236 MB | **237 MB** |
 
-If you deparse large trees repeatedly, run with jemalloc.
+The system-malloc plateau is higher than pre-patch (the unpacked structs now ride the
+memory context's high-water mark) but no longer ratchets; under jemalloc the patch is
+memory-neutral. If you deparse large trees repeatedly, run with jemalloc.
 
 **Untrusted input.** Like every other entry point here, `deparse()` runs synchronously on
 the calling thread and has no aggregate size budget — a large tree blocks the event loop

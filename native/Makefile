@@ -66,6 +66,11 @@ $(LIBPG_QUERY_DIR):
 	mkdir -p $(CACHE_DIR)
 	rm -rf $(LIBPG_QUERY_DIR).tmp
 	git clone -b $(LIBPG_QUERY_TAG) --single-branch --depth 1 $(LIBPG_QUERY_REPO) $(LIBPG_QUERY_DIR).tmp
+	# Local patches, applied before the move so a failed patch can't leave a
+	# poisoned cache dir. patches/*.patch documents what each one is for; a
+	# conflict on a libpg_query bump fails the build loudly, which is the
+	# desired signal that the patch needs rebasing or upstreaming succeeded.
+	cd $(LIBPG_QUERY_DIR).tmp && for p in $(CURDIR)/patches/*.patch; do patch -p1 < $$p; done
 	mv $(LIBPG_QUERY_DIR).tmp $(LIBPG_QUERY_DIR)
 
 $(LIBPG_QUERY_LIB): $(LIBPG_QUERY_DIR)

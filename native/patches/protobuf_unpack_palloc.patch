@@ -1,0 +1,60 @@
+Unpack deparse input with palloc instead of malloc, and skip the free pass.
+
+protobuf-c's default allocator does one malloc per message and, worse,
+protobuf_c_message_free_unpacked walks every field of every message's
+descriptor to find pointers to free. pg_query's Node descriptor has 271
+fields and every value in a parse tree is wrapped in a Node, so profiling
+puts ~80% of pg_query_deparse_protobuf inside protobuf-c: 45% of samples
+in free_unpacked alone, 34% in unpack.
+
+pg_query_protobuf_to_nodes has exactly one caller, pg_query_deparse_protobuf,
+which always runs it inside a pg_query memory context -- the same context
+_readRawStmt already pallocs the Node tree into. palloc is an arena here:
+allocation is a bump, and MemoryContextDelete frees everything at once. So
+the unpacked protobuf structs can live in the context too, the free pass
+becomes unnecessary, and the 271-field descriptor walk disappears with it.
+
+Byte-level behaviour is unchanged: re-packing an arena-unpacked message
+reproduces the input exactly, and the deparse test suite pins output SQL.
+
+diff --git a/src/pg_query_readfuncs_protobuf.c b/src/pg_query_readfuncs_protobuf.c
+index d0a7e21..2993096 100644
+--- a/src/pg_query_readfuncs_protobuf.c
++++ b/src/pg_query_readfuncs_protobuf.c
+@@ -152,13 +152,27 @@ static Node * _readNode(PgQuery__Node *msg)
+ 	}
+ }
+ 
++static void *unpack_palloc(void *allocator_data, size_t size)
++{
++	return palloc(size);
++}
++
++static void unpack_free_noop(void *allocator_data, void *pointer)
++{
++	/* freed wholesale when the caller's memory context is deleted */
++}
++
++static ProtobufCAllocator unpack_allocator = {
++	unpack_palloc, unpack_free_noop, NULL
++};
++
+ List * pg_query_protobuf_to_nodes(PgQueryProtobuf protobuf)
+ {
+ 	PgQuery__ParseResult *result = NULL;
+ 	List * list = NULL;
+ 	size_t i = 0;
+ 
+-	result = pg_query__parse_result__unpack(NULL, protobuf.len, (const uint8_t *) protobuf.data);
++	result = pg_query__parse_result__unpack(&unpack_allocator, protobuf.len, (const uint8_t *) protobuf.data);
+ 
+ 	// TODO: Handle this by returning an error instead
+ 	Assert(result != NULL);
+@@ -171,7 +185,5 @@ List * pg_query_protobuf_to_nodes(PgQueryProtobuf protobuf)
+     for (i = 1; i < result->n_stmts; i++)
+ 		list = lappend(list, _readRawStmt(result->stmts[i]));
+ 
+-	pg_query__parse_result__free_unpacked(result, NULL);
+-
+ 	return list;
+ }
