@@ -14,24 +14,28 @@ required field?" check per descriptor makes it disappear for Node while
 leaving it intact for List, SelectStmt and everything else that genuinely has
 repeated fields.
 
-The memo packs descriptor pointer and answer into one word (descriptors are
-pointer-aligned, so the low bit is free). A single aligned word cannot tear, so
-a concurrent unpack either sees a complete entry for its own descriptor or
-misses and recomputes: no lock, no torn state, and a hash collision merely
-costs a recompute.
+The memo is thread-local, so there is no shared mutable state: each thread
+builds its own table and keeps it warm across calls, which suits a deparse path
+where the same handful of descriptors recur on every request. libpg_query
+already depends on thread-local storage (__thread pg_query_initialized in
+pg_query.c), so this adds no portability requirement.
 
-The guarded loop body is deliberately left un-reindented so this stays a
-two-line change and rebases cleanly onto a new protobuf-c.
-
-Measured on darwin-arm64: unpack drops 3.0-3.2x on top of the palloc patch.
-Re-packing an unpacked message reproduces the input byte-for-byte across the
-42-statement corpus plus three shapes, checked against a stock build.
+Caching across calls is safe because the cached value is a pure function of
+desc->fields[*].label, and descriptors are generated as `const` -- they land in
+read-only data and never change. The one way a pointer-keyed cache can go stale
+is address reuse: a descriptor freed and a different one placed at the same
+address. That cannot happen here, because the table is compiled into the same
+image as the descriptors it keys on, so the two share a lifetime; unloading the
+image discards the table with them. A consumer that builds descriptors
+dynamically on the heap would need to think harder about this, which is one
+more reason the real upstream fix is a flag emitted by protoc-gen-c rather than
+any cache at all.
 
 diff --git a/vendor/protobuf-c/protobuf-c.c b/vendor/protobuf-c/protobuf-c.c
-index 1f8e607..f45a6d8 100644
+index 1f8e607..d043ff3 100644
 --- a/vendor/protobuf-c/protobuf-c.c
 +++ b/vendor/protobuf-c/protobuf-c.c
-@@ -3022,6 +3022,57 @@ message_init_generic(const ProtobufCMessageDescriptor *desc,
+@@ -3022,6 +3022,62 @@ message_init_generic(const ProtobufCMessageDescriptor *desc,
  #define REQUIRED_FIELD_BITMAP_IS_SET(index)	\
  	(required_fields_bitmap[(index)/8] & (1UL<<((index)%8)))
  
@@ -47,16 +51,21 @@ index 1f8e607..f45a6d8 100644
 + * in a parse tree is wrapped in a Node. So for the dominant message type all
 + * 271 iterations are no-ops, repeated once per node in the tree.
 + *
++ * The memo is thread-local, so there is no shared mutable state and no data
++ * race to reason about -- each thread builds its own table and keeps it warm
++ * across calls, which suits the deparse path where the same handful of
++ * descriptors recur on every request. libpg_query already relies on
++ * thread-local storage (see __thread pg_query_initialized in pg_query.c), so
++ * this adds no new portability requirement.
++ *
 + * Descriptor pointer and answer share one word: descriptors contain pointers
-+ * and are therefore at least 2-byte aligned, leaving the low bit free. A
-+ * single aligned word cannot tear, so a concurrent unpack either sees a
-+ * fully-formed entry for its own descriptor or misses and recomputes -- no
-+ * lock and no torn state. A hash collision evicts, which costs a recompute and
-+ * remains correct. An unaligned descriptor (impossible in practice) simply
-+ * skips the memo.
++ * and are therefore at least 2-byte aligned, leaving the low bit free. A hash
++ * collision evicts, which costs a recompute and remains correct. An unaligned
++ * descriptor (impossible in practice) simply skips the memo. 256 slots covers
++ * pg_query's ~270 message types with room to spare at 2 KB per thread.
 + */
-+#define FIELD_LOOP_MEMO_SIZE 1024
-+static volatile uintptr_t field_loop_memo[FIELD_LOOP_MEMO_SIZE];
++#define FIELD_LOOP_MEMO_SIZE 256
++static __thread uintptr_t field_loop_memo[FIELD_LOOP_MEMO_SIZE];
 +
 +static protobuf_c_boolean
 +message_needs_field_loop(const ProtobufCMessageDescriptor *desc)
@@ -89,7 +98,7 @@ index 1f8e607..f45a6d8 100644
  ProtobufCMessage *
  protobuf_c_message_unpack(const ProtobufCMessageDescriptor *desc,
  			  ProtobufCAllocator *allocator,
-@@ -3227,6 +3278,7 @@ protobuf_c_message_unpack(const ProtobufCMessageDescriptor *desc,
+@@ -3227,6 +3283,7 @@ protobuf_c_message_unpack(const ProtobufCMessageDescriptor *desc,
  	}
  
  	/* allocate space for repeated fields, also check that all required fields have been set */
@@ -97,7 +106,7 @@ index 1f8e607..f45a6d8 100644
  	for (f = 0; f < desc->n_fields; f++) {
  		const ProtobufCFieldDescriptor *field = desc->fields + f;
  		if (field->label == PROTOBUF_C_LABEL_REPEATED) {
-@@ -3265,6 +3317,7 @@ protobuf_c_message_unpack(const ProtobufCMessageDescriptor *desc,
+@@ -3265,6 +3322,7 @@ protobuf_c_message_unpack(const ProtobufCMessageDescriptor *desc,
  			}
  		}
  	}

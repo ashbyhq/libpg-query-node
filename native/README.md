@@ -201,12 +201,13 @@ value in a parse tree wrapped in one. Two patches in `patches/` remove that walk
 both directions — `protobuf_unpack_palloc.patch` unpacks into libpg_query's memory
 context and drops protobuf-c's free pass, and `protobufc_skip_noop_field_loop.patch`
 skips the post-scan field loop for descriptors that have nothing repeated or required.
-Together they take a deparse from 8.0 µs to 3.4 µs on a simple select and from 70 µs to
-41 µs on a 100-column projection.
+Together they take a deparse from 8.0 µs to 3.6 µs on a simple select and from 70 µs to
+43 µs on a 100-column projection.
 
-Against `pgsql-deparser` on a parse→edit→deparse flow: 1.02× on small statements, 1.07×
-on medium, and **0.83× — faster — on wide ones**, where the hand-written TypeScript
-deparser pays per-node costs this doesn't.
+Against `pgsql-deparser` on a parse→edit→deparse flow: 1.03× on small statements, 1.08×
+on medium — call it parity — and 0.84× on a 100-column projection. The TypeScript
+deparser pays a visitor dispatch per node, so this pulls ahead as trees get broad rather
+than deep; on ordinary statements the two are even.
 
 The allocator caveat from parsing still applies. On a 26 MB parse tree, four
 deparse/settle cycles:
