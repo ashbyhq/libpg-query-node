@@ -70,7 +70,10 @@ $(LIBPG_QUERY_DIR):
 	# poisoned cache dir. patches/*.patch documents what each one is for; a
 	# conflict on a libpg_query bump fails the build loudly, which is the
 	# desired signal that the patch needs rebasing or upstreaming succeeded.
-	cd $(LIBPG_QUERY_DIR).tmp && for p in $(CURDIR)/patches/*.patch; do patch -p1 < $$p; done
+	# git apply rather than patch(1): the musl builds run in Alpine containers
+	# that don't ship patch, but git is guaranteed here — this recipe just ran
+	# git clone.
+	cd $(LIBPG_QUERY_DIR).tmp && for p in $(CURDIR)/patches/*.patch; do git apply $$p; done
 	mv $(LIBPG_QUERY_DIR).tmp $(LIBPG_QUERY_DIR)
 
 $(LIBPG_QUERY_LIB): $(LIBPG_QUERY_DIR)
