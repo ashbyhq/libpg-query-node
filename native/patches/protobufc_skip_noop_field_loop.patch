@@ -1,0 +1,107 @@
+Skip protobuf-c's post-scan field loop when it has nothing to do.
+
+protobuf_c_message_unpack finishes by walking every field of the message
+descriptor to allocate arrays for repeated fields and verify required fields.
+That walk is O(fields) per message, and pg_query's Node is the pathological
+case: 271 fields, proto3 (nothing required) and a oneof of singular message
+fields (nothing repeated), with every value in a parse tree wrapped in a Node.
+So the loop runs 271 no-op iterations for every node in the tree.
+
+Profiling a deparse after the palloc patch put 84% of samples in
+protobuf_c_message_unpack's own body, with the allocator down in the noise --
+this loop is what remained. Guarding it with a memoized "has any repeated or
+required field?" check per descriptor makes it disappear for Node while
+leaving it intact for List, SelectStmt and everything else that genuinely has
+repeated fields.
+
+The memo packs descriptor pointer and answer into one word (descriptors are
+pointer-aligned, so the low bit is free). A single aligned word cannot tear, so
+a concurrent unpack either sees a complete entry for its own descriptor or
+misses and recomputes: no lock, no torn state, and a hash collision merely
+costs a recompute.
+
+The guarded loop body is deliberately left un-reindented so this stays a
+two-line change and rebases cleanly onto a new protobuf-c.
+
+Measured on darwin-arm64: unpack drops 3.0-3.2x on top of the palloc patch.
+Re-packing an unpacked message reproduces the input byte-for-byte across the
+42-statement corpus plus three shapes, checked against a stock build.
+
+diff --git a/vendor/protobuf-c/protobuf-c.c b/vendor/protobuf-c/protobuf-c.c
+index 1f8e607..f45a6d8 100644
+--- a/vendor/protobuf-c/protobuf-c.c
++++ b/vendor/protobuf-c/protobuf-c.c
+@@ -3022,6 +3022,57 @@ message_init_generic(const ProtobufCMessageDescriptor *desc,
+ #define REQUIRED_FIELD_BITMAP_IS_SET(index)	\
+ 	(required_fields_bitmap[(index)/8] & (1UL<<((index)%8)))
+ 
++/*
++ * Memoized answer to "does the post-scan field loop in
++ * protobuf_c_message_unpack have anything to do for this descriptor?" -- that
++ * is, does the message have any repeated field to allocate an array for, or
++ * any required field to verify.
++ *
++ * That loop walks every field of the descriptor once per unpacked message.
++ * pg_query's Node has 271 fields, is proto3 (so nothing is required) and is a
++ * oneof of singular message fields (so nothing is repeated) -- and every value
++ * in a parse tree is wrapped in a Node. So for the dominant message type all
++ * 271 iterations are no-ops, repeated once per node in the tree.
++ *
++ * Descriptor pointer and answer share one word: descriptors contain pointers
++ * and are therefore at least 2-byte aligned, leaving the low bit free. A
++ * single aligned word cannot tear, so a concurrent unpack either sees a
++ * fully-formed entry for its own descriptor or misses and recomputes -- no
++ * lock and no torn state. A hash collision evicts, which costs a recompute and
++ * remains correct. An unaligned descriptor (impossible in practice) simply
++ * skips the memo.
++ */
++#define FIELD_LOOP_MEMO_SIZE 1024
++static volatile uintptr_t field_loop_memo[FIELD_LOOP_MEMO_SIZE];
++
++static protobuf_c_boolean
++message_needs_field_loop(const ProtobufCMessageDescriptor *desc)
++{
++	uintptr_t	key = (uintptr_t) desc;
++	size_t		slot = (key >> 4) % FIELD_LOOP_MEMO_SIZE;
++	uintptr_t	entry;
++	unsigned	f;
++	protobuf_c_boolean needed = FALSE;
++
++	if ((key & 1) != 0)
++		return TRUE;			/* unaligned: cannot memoize, take the loop */
++
++	entry = field_loop_memo[slot];
++	if ((entry & ~(uintptr_t) 1) == key)
++		return (protobuf_c_boolean) (entry & 1);
++
++	for (f = 0; f < desc->n_fields; f++) {
++		if (desc->fields[f].label == PROTOBUF_C_LABEL_REPEATED ||
++		    desc->fields[f].label == PROTOBUF_C_LABEL_REQUIRED) {
++			needed = TRUE;
++			break;
++		}
++	}
++
++	field_loop_memo[slot] = key | (uintptr_t) (needed ? 1 : 0);
++	return needed;
++}
++
+ ProtobufCMessage *
+ protobuf_c_message_unpack(const ProtobufCMessageDescriptor *desc,
+ 			  ProtobufCAllocator *allocator,
+@@ -3227,6 +3278,7 @@ protobuf_c_message_unpack(const ProtobufCMessageDescriptor *desc,
+ 	}
+ 
+ 	/* allocate space for repeated fields, also check that all required fields have been set */
++	if (message_needs_field_loop(desc)) {
+ 	for (f = 0; f < desc->n_fields; f++) {
+ 		const ProtobufCFieldDescriptor *field = desc->fields + f;
+ 		if (field->label == PROTOBUF_C_LABEL_REPEATED) {
+@@ -3265,6 +3317,7 @@ protobuf_c_message_unpack(const ProtobufCMessageDescriptor *desc,
+ 			}
+ 		}
+ 	}
++	}
+ #undef CLEAR_REMAINING_N_PTRS
+ 
+ 	/* allocate space for unknown fields */

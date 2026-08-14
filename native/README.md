@@ -194,24 +194,33 @@ Each comment carries `matchLocation` (the offset it anchors to), `newlinesBefore
   no intermediate copy of the tree.
 
 Encoding is a single pass that writes protobuf bytes straight out of the parse tree —
-0.3–2.5 µs of a 1.4–9.6 µs deparse on ordinary statements. The other side of the call is
-patched: `patches/protobuf_unpack_palloc.patch` makes libpg_query unpack the protobuf
-into its memory context instead of malloc and skip protobuf-c's free pass, whose
-per-message walk of the 271-field `Node` descriptor was ~80% of the C time. That patch
-roughly halved a deparse; end to end this now runs within 1.0–1.3× of `pgsql-deparser`
-on a parse→edit→deparse flow, at parity on wide statements.
+0.3–17 µs of a 1.0–41 µs deparse. Most of the remaining time was never the SQL
+rendering: profiling put ~90% of the C call inside protobuf-c, which walks the
+descriptor of every message it touches, and pg_query's `Node` has 271 fields with every
+value in a parse tree wrapped in one. Two patches in `patches/` remove that walk from
+both directions — `protobuf_unpack_palloc.patch` unpacks into libpg_query's memory
+context and drops protobuf-c's free pass, and `protobufc_skip_noop_field_loop.patch`
+skips the post-scan field loop for descriptors that have nothing repeated or required.
+Together they take a deparse from 8.0 µs to 3.4 µs on a simple select and from 70 µs to
+41 µs on a 100-column projection.
+
+Against `pgsql-deparser` on a parse→edit→deparse flow: 1.02× on small statements, 1.07×
+on medium, and **0.83× — faster — on wide ones**, where the hand-written TypeScript
+deparser pays per-node costs this doesn't.
 
 The allocator caveat from parsing still applies. On a 26 MB parse tree, four
 deparse/settle cycles:
 
 | Allocator | after #1 | #2 | #3 | #4 |
 |-----------|---------|-----|-----|-----|
-| system | 704 MB | 710 MB | 711 MB | **712 MB (flat)** |
-| **jemalloc** | 230 MB | 235 MB | 236 MB | **237 MB** |
+| system | 705 MB | 710 MB | 711 MB | **712 MB (flat)** |
+| **jemalloc** | 245 MB | 246 MB | 248 MB | **249 MB** |
 
-The system-malloc plateau is higher than pre-patch (the unpacked structs now ride the
-memory context's high-water mark) but no longer ratchets; under jemalloc the patch is
-memory-neutral. If you deparse large trees repeatedly, run with jemalloc.
+Neither plateau ratchets. The system-malloc figure is higher than it was before the
+patches because the unpacked structs now ride the memory context's high-water mark; on
+a sustained realistic workload (126k parse→edit→deparse ops/sec on ordinary statements)
+RSS holds at ~70 MB under both allocators. If you deparse large trees repeatedly, run
+with jemalloc.
 
 **Untrusted input.** Like every other entry point here, `deparse()` runs synchronously on
 the calling thread and has no aggregate size budget — a large tree blocks the event loop
