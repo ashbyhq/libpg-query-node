@@ -20,6 +20,8 @@ const statements = require("./fixtures/statements.js");
 // So re-recording them to make a failure go away throws that away. A statement
 // that stops matching means the encoder changed what it sends to libpg_query,
 // which can change the SQL that comes back out. See scripts/generate-fixtures.mjs.
+const PARSE_VERSION = query.parseSync("SELECT 1").version;
+
 describe("Protobuf encoding", () => {
   describe("Encoded output matches what was recorded", () => {
     for (const sql of statements) {
@@ -155,6 +157,90 @@ describe("Protobuf encoding", () => {
       } finally {
         delete Object.prototype.pollutedKey;
       }
+    });
+  });
+
+  // 64-bit fields split by signedness. JSON.parse rounds both boundary values
+  // to the same doubles, but what the rounding means differs: on a signed field
+  // 2^63 can only be INT64_MAX, while on an unsigned field 2^63 is a legitimate
+  // exact value — bit 63 of a bitmapset — and clamping it flips every bit of
+  // the mask. That clamp shipped in all three encoder generations before being
+  // caught, because parse() never emits the planner-only unsigned fields.
+  describe("64-bit signedness", () => {
+    const protobuf = require("protobufjs");
+    const root = protobuf.Root.fromJSON(require("../src/gen/pg_query.json"));
+    const ParseResult = root.lookupType("pg_query.ParseResult");
+    const decode = (bytes) =>
+      ParseResult.toObject(ParseResult.decode(bytes), { longs: String });
+
+    const withNotnulls = (notnulls) => ({
+      version: PARSE_VERSION,
+      stmts: [{ stmt: { SelectStmt: {
+        fromClause: [{ TableFunc: { notnulls } }],
+        op: "SETOP_NONE", limitOption: "LIMIT_OPTION_DEFAULT",
+      } } }],
+    });
+
+    it("should keep 2^63 exact in an unsigned bitmapset", () => {
+      const decoded = decode(encodeParseTree(withNotnulls([9223372036854775808])));
+      assert.deepEqual(
+        decoded.stmts[0].stmt.selectStmt.fromClause[0].tableFunc.notnulls,
+        ["9223372036854775808"]
+      );
+    });
+
+    it("should clamp 2^64 to UINT64_MAX in an unsigned field", () => {
+      const decoded = decode(encodeParseTree(withNotnulls([18446744073709551616])));
+      assert.deepEqual(
+        decoded.stmts[0].stmt.selectStmt.fromClause[0].tableFunc.notnulls,
+        ["18446744073709551615"]
+      );
+    });
+
+    it("should still clamp 2^63 to INT64_MAX in a signed field", () => {
+      // FetchStmt.howMany is int64; this is the FETCH ALL repair.
+      const tree = {
+        version: PARSE_VERSION,
+        stmts: [{ stmt: { FetchStmt: {
+          direction: "FETCH_FORWARD", howMany: 9223372036854775808, portalname: "cur",
+        } } }],
+      };
+      const decoded = decode(encodeParseTree(tree));
+      assert.equal(decoded.stmts[0].stmt.fetchStmt.howMany, "9223372036854775807");
+    });
+  });
+
+  // A nulled field must mean "absent", not a present-but-empty submessage.
+  // Setting a clause to null is the natural way to delete it from a tree being
+  // edited, and an empty Node on the wire is a different statement.
+  describe("Null means absent", () => {
+    it("should encode a nulled message field identically to a deleted one", () => {
+      const nulled = query.parseSync("SELECT a FROM t WHERE b = 1");
+      nulled.stmts[0].stmt.SelectStmt.whereClause = null;
+      const deleted = query.parseSync("SELECT a FROM t WHERE b = 1");
+      delete deleted.stmts[0].stmt.SelectStmt.whereClause;
+      assert.deepEqual(encodeParseTree(nulled), encodeParseTree(deleted));
+    });
+
+    it("should treat undefined the same way", () => {
+      const tree = query.parseSync("SELECT a FROM t WHERE b = 1");
+      tree.stmts[0].stmt.SelectStmt.whereClause = undefined;
+      const deleted = query.parseSync("SELECT a FROM t WHERE b = 1");
+      delete deleted.stmts[0].stmt.SelectStmt.whereClause;
+      assert.deepEqual(encodeParseTree(tree), encodeParseTree(deleted));
+    });
+
+    it("should still write an empty object as a present submessage", () => {
+      // {"Integer":{}} is the integer zero — presence is meaningful.
+      const withEmpty = { version: PARSE_VERSION, stmts: [{ stmt: { SelectStmt: {
+        targetList: [{ ResTarget: { val: { A_Const: { ival: {} } } } }],
+        op: "SETOP_NONE", limitOption: "LIMIT_OPTION_DEFAULT",
+      } } }] };
+      const without = { version: PARSE_VERSION, stmts: [{ stmt: { SelectStmt: {
+        targetList: [{ ResTarget: { val: { A_Const: {} } } }],
+        op: "SETOP_NONE", limitOption: "LIMIT_OPTION_DEFAULT",
+      } } }] };
+      assert.notDeepEqual(encodeParseTree(withEmpty), encodeParseTree(without));
     });
   });
 

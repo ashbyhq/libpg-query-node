@@ -18,14 +18,6 @@ import descriptor from "./gen/pg_query.json";
  */
 const RECURSION_LIMIT = 2000;
 
-// protobufjs enforces its own depth cap, separately, in fromObject() and
-// encode() — and it defaults to 100, the same too-low value @bufbuild/protobuf
-// used. It lives on a module-global rather than per-Root, so it has to be set
-// here. Raising it only relaxes a bound, so it cannot break another protobufjs
-// user in the process; leaving it at the default would cap us at ~92 set
-// operations no matter what RECURSION_LIMIT says.
-protobuf.util.recursionLimit = RECURSION_LIMIT;
-
 // The schema is loaded from a pre-parsed descriptor rather than the .proto
 // text: Root.fromJSON is ~9 ms, parsing 123 KB of .proto is not, and this cost
 // is paid on every process start.
@@ -227,20 +219,35 @@ const INT64_MAX = 9223372036854775807n;
 const INT64_MIN = -9223372036854775808n;
 const UINT64_MAX = 18446744073709551615n;
 const TWO_POW_63 = 9223372036854775808n;
+const TWO_POW_64 = 18446744073709551616n;
 
-function repair64Bit(value: number): string | number {
+function repair64Bit(value: number, unsigned: boolean): string | number {
   if (Number.isSafeInteger(value) || !Number.isInteger(value)) {
     return value;
   }
 
   const exact = BigInt(value);
+
+  // The rounded-boundary clamps are signedness-specific, because the boundary
+  // itself is. For a signed field, 2^63 is out of range and can only be
+  // INT64_MAX after rounding. For an unsigned field, 2^63 is a legitimate
+  // exact value — bit 63 of a bitmapset, i.e. attno 64 in Var.varnullingrels
+  // or TableFunc.notnulls — and clamping it to 2^63-1 would flip every bit of
+  // the mask. There the rounded boundary is 2^64, which can only be
+  // UINT64_MAX.
+  if (unsigned) {
+    if (exact === TWO_POW_64) return UINT64_MAX.toString();
+    if (exact > UINT64_MAX || exact < 0n) return value;
+    return exact.toString();
+  }
+
+  if (exact === TWO_POW_63) return INT64_MAX.toString();
   if (exact > UINT64_MAX || exact < INT64_MIN) {
     // Too large to be a 64-bit integer field — a genuine double (SubPlan costs,
     // RangeTblEntry.enrtuples). Leave it alone.
     return value;
   }
-
-  return (exact === TWO_POW_63 ? INT64_MAX : exact).toString();
+  return exact.toString();
 }
 
 /** Proto types that need the 64-bit repair; everything else passes through. */
@@ -264,17 +271,17 @@ function writeScalar(writer: protobuf.Writer, scalar: string, value: unknown): v
     case "fixed32": writer.fixed32(value as number); return;
     case "sfixed32": writer.sfixed32(value as number); return;
     case "bytes": writer.bytes(value as Uint8Array); return;
-    case "int64": writer.int64(repair(value) as never); return;
-    case "uint64": writer.uint64(repair(value) as never); return;
-    case "sint64": writer.sint64(repair(value) as never); return;
-    case "fixed64": writer.fixed64(repair(value) as never); return;
-    case "sfixed64": writer.sfixed64(repair(value) as never); return;
+    case "int64": writer.int64(repair(value, false) as never); return;
+    case "uint64": writer.uint64(repair(value, true) as never); return;
+    case "sint64": writer.sint64(repair(value, false) as never); return;
+    case "fixed64": writer.fixed64(repair(value, true) as never); return;
+    case "sfixed64": writer.sfixed64(repair(value, false) as never); return;
     default: throw new Error(`cannot encode unsupported scalar type "${scalar}"`);
   }
 }
 
-function repair(value: unknown): unknown {
-  return typeof value === "number" ? repair64Bit(value) : value;
+function repair(value: unknown, unsigned: boolean): unknown {
+  return typeof value === "number" ? repair64Bit(value, unsigned) : value;
 }
 
 /** Write a single (non-repeated) value, tag included. */
@@ -284,10 +291,15 @@ function writeValue(
   value: unknown,
   depth: number
 ): void {
+  // Absent before anything else: nulling a field is the natural way to delete
+  // a clause from a tree you are editing, and it has to mean "not present" —
+  // not a present-but-empty submessage on the wire.
+  if (value === null || value === undefined) return;
+
   if (plan.messageType !== null) {
     // Length-delimited: fork() starts a nested buffer, ldelim() closes it and
-    // prefixes the length. A submessage is written even when empty, because
-    // its presence is meaningful — `{"Integer":{}}` is the integer zero.
+    // prefixes the length. A submessage IS written when empty, because its
+    // presence is meaningful — `{"Integer":{}}` is the integer zero.
     writer.uint32(plan.tag).fork();
     writeMessage(writer, value, plan.messageType, depth);
     writer.ldelim();
@@ -301,7 +313,7 @@ function writeValue(
     return;
   }
 
-  if (value === null || value === undefined || value === plan.defaultValue) return;
+  if (value === plan.defaultValue) return;
   writer.uint32(plan.tag);
   writeScalar(writer, plan.scalar, value);
 }

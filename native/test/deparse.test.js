@@ -151,6 +151,14 @@ describe("Deparsing", () => {
     });
   });
 
+  describe("Editing by nulling a field", () => {
+    it("should deparse a nulled clause the same as a deleted one", () => {
+      const parsed = query.parseSync("SELECT a FROM t WHERE b = 1");
+      parsed.stmts[0].stmt.SelectStmt.whereClause = null;
+      assert.equal(query.deparseSync(parsed), "SELECT a FROM t");
+    });
+  });
+
   describe("Async Deparsing", () => {
     it("should resolve to the same SQL as the sync variant", async () => {
       const parsed = await query.parse("select a from t");
