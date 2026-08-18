@@ -1,0 +1,74 @@
+Spell string constants the way Postgres does, without E'' escape syntax.
+
+deparseStringLiteral wraps any value containing a backslash in E'' and
+doubles the backslashes. The comment explains why: it is copied from
+postgres_fdw/deparse.c, which ships SQL to a remote server whose
+standard_conforming_strings it cannot see, so it picks the spelling that
+is safe under either setting.
+
+A general-purpose deparser has no remote server. Postgres' own
+parse-tree-to-SQL path, simple_quote_literal() in ruleutils.c, does the
+opposite and says so:
+
+    We form the string literal according to the prevailing setting of
+    standard_conforming_strings; we never use E''.
+
+The difference is observable. pg_get_constraintdef() on
+CHECK (c ~ '^\d+$') returns the plain literal, while deparsing the same
+parse tree here returns E'^\\d+$'. Ordinary statements therefore fail the
+textual round-trip this repo's deparse tests are built on -- among them
+SELECT regexp_replace(x, '\s+', ' '), which is unremarkable SQL.
+
+E'' is also a Postgres extension rather than standard SQL, so it does not
+survive being handed to other engines. We deparse Postgres parse trees and
+send the result to ClickHouse, which has no E prefix: it lexes the E as an
+identifier and rejects the whole query. Postgres made this same change for
+the same reason in 2006, so that pg_dump output could load into other
+databases without the backslash doubling.
+
+Keying the doubling off standard_conforming_strings rather than hardcoding
+it also honours PG_QUERY_DISABLE_STANDARD_CONFORMING_STRINGS, which this
+library already exposes and which the deparser previously ignored.
+
+Upstreaming this needs one expectation updated: deparse_tests.c pins
+CREATE DOMAIN us_postal_code with E'^\\d{5}$' inputs, copied from the
+Postgres docs, which now round-trip as plain literals. We do not run that
+suite here, so the patch is left minimal.
+
+diff --git a/src/postgres_deparse.c b/src/postgres_deparse.c
+index 58401ad..a018112 100644
+--- a/src/postgres_deparse.c
++++ b/src/postgres_deparse.c
+@@ -13,6 +13,7 @@
+ #include "nodes/nodes.h"
+ #include "nodes/parsenodes.h"
+ #include "nodes/pg_list.h"
++#include "parser/parser.h"
+ #include "utils/builtins.h"
+ #include "utils/datetime.h"
+ #include "utils/timestamp.h"
+@@ -675,19 +676,17 @@ deparseStringLiteral(DeparseState *state, const char *val)
+ 	const char *valptr;
+ 
+ 	/*
+-	 * Rather than making assumptions about the remote server's value of
+-	 * standard_conforming_strings, always use E'foo' syntax if there are any
+-	 * backslashes.  This will fail on remote servers before 8.1, but those
+-	 * are long out of support.
++	 * We form the string literal according to the prevailing setting of
++	 * standard_conforming_strings; we never use E''.  This matches
++	 * simple_quote_literal() in ruleutils.c, which is what Postgres itself
++	 * uses to turn a parse tree back into SQL.
+ 	 */
+-	if (strchr(val, '\\') != NULL)
+-		deparseAppendStringInfoChar(state, ESCAPE_STRING_SYNTAX);
+ 	deparseAppendStringInfoChar(state, '\'');
+ 	for (valptr = val; *valptr; valptr++)
+ 	{
+ 		char		ch = *valptr;
+ 
+-		if (SQL_STR_DOUBLE(ch, true))
++		if (SQL_STR_DOUBLE(ch, !standard_conforming_strings))
+ 			deparseAppendStringInfoChar(state, ch);
+ 		deparseAppendStringInfoChar(state, ch);
+ 	}

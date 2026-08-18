@@ -47,6 +47,37 @@ describe("Deparsing", () => {
       );
     });
 
+    // Upstream wraps any backslash-containing constant in E'' and doubles the
+    // backslashes, which patches/deparse_no_escape_string_syntax.patch removes.
+    // Pinned as behaviour rather than left to the patch applying, because the
+    // spelling is what consumers depend on: E'' is a Postgres extension that
+    // other engines reject, and a caller escaping for a target dialect at the
+    // tree level would have its work doubled by a second escaping pass.
+    describe("String literals", () => {
+      for (const sql of [
+        String.raw`SELECT 'c:\temp'`,
+        String.raw`SELECT regexp_replace(x, '\s+', ' ')`,
+        String.raw`SELECT '\x41'`,
+        String.raw`SELECT 'no backslash'`,
+        String.raw`SELECT 'has''quote'`,
+      ]) {
+        it(`should spell as a plain literal: ${sql}`, () => {
+          const deparsed = query.deparseSync(query.parseSync(sql));
+          assert.equal(deparsed, sql);
+          assert.doesNotMatch(deparsed, /\bE'/);
+        });
+      }
+
+      it("should leave a backslash exactly as many as the tree holds", () => {
+        // A caller that pre-escapes for another dialect gets its value through
+        // untouched, rather than doubled again on the way out.
+        const tree = query.parseSync(String.raw`SELECT 'a'`);
+        const target = tree.stmts[0].stmt.SelectStmt.targetList[0].ResTarget.val;
+        target.A_Const.sval.sval = String.raw`c:\\temp`;
+        assert.equal(query.deparseSync(tree), String.raw`SELECT 'c:\\temp'`);
+      });
+    });
+
     for (const sql of ROUND_TRIP_QUERIES) {
       it(`should round-trip: ${sql}`, () => {
         const parsed = query.parseSync(sql);
