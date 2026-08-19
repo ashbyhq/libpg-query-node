@@ -24,9 +24,11 @@
     "build:ts": "tsc",
     "build": "npm run build:native && npm run build:ts",
     "clean": "make clean && rm -rf dist",
-    "test": "node --test test/parsing.test.js test/fingerprint.test.js test/normalize.test.js test/plpgsql.test.js test/scan.test.js test/errors.test.js",
+    "test": "node --test test/parsing.test.js test/fingerprint.test.js test/normalize.test.js test/plpgsql.test.js test/scan.test.js test/errors.test.js test/deparse.test.js test/proto.test.js test/readme.test.js",
     "benchmark": "node benchmark/memory.mjs",
-    "package-platforms": "node scripts/package-platforms.mjs"
+    "package-platforms": "node scripts/package-platforms.mjs",
+    "generate:proto": "node scripts/generate-proto.mjs",
+    "generate:fixtures": "node scripts/generate-fixtures.mjs"
   },
   "keywords": [
     "postgresql",
@@ -43,7 +45,8 @@
     "directory": "native"
   },
   "dependencies": {
-    "@pgsql/types": "^18.0.0"
+    "@pgsql/types": "^18.0.0",
+    "protobufjs": "^8.7.2"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",

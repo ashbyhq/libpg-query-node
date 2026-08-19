@@ -1,6 +1,7 @@
 #include <napi.h>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 extern "C" {
 #include "pg_query.h"
@@ -65,6 +66,33 @@ static Napi::Value ReturnResult(Napi::Env env, const std::string &result) {
   obj.Set("result", Napi::String::New(env, result));
   return obj;
 }
+
+// Overload for an already-built JS value (arrays, objects), so the
+// {error, result} envelope has one definition rather than one per call site.
+static Napi::Value ReturnResult(Napi::Env env, Napi::Value result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("error", env.Null());
+  obj.Set("result", result);
+  return obj;
+}
+
+// Overload for a C string owned by libpg_query. Copying it into a std::string
+// first would duplicate the whole payload for no reason — deparse output is the
+// size of the query itself.
+static Napi::Value ReturnResult(Napi::Env env, const char *result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("error", env.Null());
+  obj.Set("result", Napi::String::New(env, result ? result : ""));
+  return obj;
+}
+
+// Upper bound on DeparseOptions.comments. A JS array reports a `length` of up
+// to 2^32-1 regardless of how many elements it actually holds, and that length
+// drives both the reserve() calls and the read loop below — so a sparse array
+// with a huge length would otherwise balloon RSS and wedge the thread. Real
+// comment lists come from extractComments() and are bounded by the token count
+// of the source query; anything past this is a bug or an attack.
+static constexpr uint32_t kMaxDeparseComments = 1000000;
 
 static std::string ValidateQuery(Napi::Env env, const Napi::CallbackInfo &info) {
   if (info.Length() < 1 || !info[0].IsString()) {
@@ -228,11 +256,152 @@ static Napi::Value ScanSync(const Napi::CallbackInfo &info) {
 
   pg_query__scan_result__free_unpacked(scan_result, NULL);
   pg_query_free_scan_result(result);
+  return ReturnResult(env, scan_obj);
+}
 
-  Napi::Object obj = Napi::Object::New(env);
-  obj.Set("error", env.Null());
-  obj.Set("result", scan_obj);
-  return obj;
+// The inverse of pg_query_parse. Takes the protobuf encoding of a parse tree
+// (JS encodes the JSON tree with protobufjs — see src/proto.ts) and returns
+// SQL. Options mirror PostgresDeparseOpts; everything except `comments` is a
+// pretty-print option upstream, so it only applies alongside prettyPrint.
+static Napi::Value DeparseSync(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() < 1 || !info[0].IsTypedArray()) {
+    Napi::TypeError::New(env, "Expected a Uint8Array of protobuf-encoded parse tree")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  Napi::Uint8Array buf = info[0].As<Napi::Uint8Array>();
+  if (buf.ByteLength() == 0) {
+    Napi::Error::New(env, "Parse tree cannot be empty").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  PgQueryProtobuf parse_tree;
+  parse_tree.data = reinterpret_cast<char *>(buf.Data());
+  parse_tree.len = buf.ByteLength();
+
+  // Owns the comment strings for the duration of the deparse call.
+  std::vector<std::string> comment_texts;
+  std::vector<PostgresDeparseComment> comment_storage;
+  std::vector<PostgresDeparseComment *> comment_ptrs;
+
+  PostgresDeparseOpts opts = {};
+
+  if (info.Length() > 1 && info[1].IsObject()) {
+    Napi::Object o = info[1].As<Napi::Object>();
+
+    // A missing key reads back as undefined, which is falsy and not a number,
+    // so an explicit Has() would only add a second property lookup.
+    auto boolOpt = [&](const char *key) -> bool {
+      return o.Get(key).ToBoolean().Value();
+    };
+    auto intOpt = [&](const char *key, int fallback) -> int {
+      Napi::Value v = o.Get(key);
+      return v.IsNumber() ? v.As<Napi::Number>().Int32Value() : fallback;
+    };
+
+    opts.pretty_print = boolOpt("prettyPrint");
+    opts.indent_size = intOpt("indentSize", 4);
+    opts.max_line_length = intOpt("maxLineLength", 80);
+    opts.trailing_newline = boolOpt("trailingNewline");
+    opts.commas_start_of_line = boolOpt("commasStartOfLine");
+
+    if (o.Get("comments").IsArray()) {
+      Napi::Array arr = o.Get("comments").As<Napi::Array>();
+      const uint32_t n = arr.Length();
+
+      // Bound the declared length before it reaches reserve() or the loop.
+      if (n > kMaxDeparseComments) {
+        Napi::RangeError::New(
+            env, "Too many comments: " + std::to_string(n) + " exceeds the limit of " +
+                     std::to_string(kMaxDeparseComments))
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+      }
+
+      // Reserve up front: comment_storage must not reallocate while
+      // comment_ptrs holds pointers into it.
+      comment_texts.reserve(n);
+      comment_storage.reserve(n);
+      comment_ptrs.reserve(n);
+
+      // `text` keeps its Has() check: undefined.ToString() is the string
+      // "undefined", not empty. The numeric fields have no such trap.
+      auto intProp = [](const Napi::Object &obj, const char *key) -> int {
+        Napi::Value v = obj.Get(key);
+        return v.IsNumber() ? v.As<Napi::Number>().Int32Value() : 0;
+      };
+
+      for (uint32_t i = 0; i < n; i++) {
+        Napi::Value item = arr.Get(i);
+        if (!item.IsObject()) continue;
+        Napi::Object c = item.As<Napi::Object>();
+
+        comment_texts.push_back(
+            c.Has("text") ? c.Get("text").ToString().Utf8Value() : std::string());
+
+        PostgresDeparseComment entry = {};
+        entry.match_location = intProp(c, "matchLocation");
+        entry.newlines_before_comment = intProp(c, "newlinesBefore");
+        entry.newlines_after_comment = intProp(c, "newlinesAfter");
+        entry.str = const_cast<char *>(comment_texts.back().c_str());
+
+        // reserve() above guarantees no reallocation, so the address stays
+        // valid and the pointer can be taken here rather than in a second pass.
+        comment_storage.push_back(entry);
+        comment_ptrs.push_back(&comment_storage.back());
+      }
+
+      opts.comments = comment_ptrs.data();
+      opts.comment_count = comment_ptrs.size();
+    }
+  }
+
+  // Always the _opts entry point: upstream's pg_query_deparse_protobuf() is
+  // exactly this call with a zeroed opts struct, which is what `opts = {}` is.
+  PgQueryDeparseResult result = pg_query_deparse_protobuf_opts(parse_tree, opts);
+
+  if (result.error) {
+    Napi::Value ret = ReturnError(env, result.error);
+    pg_query_free_deparse_result(result);
+    return ret;
+  }
+
+  Napi::Value ret = ReturnResult(env, result.query);
+  pg_query_free_deparse_result(result);
+  return ret;
+}
+
+// Parse trees don't carry comments, so a parse/deparse round trip drops them.
+// Pull them off the source here so they can be handed back to DeparseSync.
+static Napi::Value ExtractCommentsSync(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+  std::string query = ValidateQuery(env, info);
+  if (env.IsExceptionPending()) return env.Undefined();
+
+  PgQueryDeparseCommentsResult result = pg_query_deparse_comments_for_query(query.c_str());
+
+  if (result.error) {
+    Napi::Value ret = ReturnError(env, result.error);
+    pg_query_free_deparse_comments_result(result);
+    return ret;
+  }
+
+  Napi::Array comments = Napi::Array::New(env, result.comment_count);
+  for (size_t i = 0; i < result.comment_count; i++) {
+    PostgresDeparseComment *c = result.comments[i];
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("matchLocation", Napi::Number::New(env, c->match_location));
+    obj.Set("newlinesBefore", Napi::Number::New(env, c->newlines_before_comment));
+    obj.Set("newlinesAfter", Napi::Number::New(env, c->newlines_after_comment));
+    obj.Set("text", Napi::String::New(env, c->str ? c->str : ""));
+    comments[i] = obj;
+  }
+
+  pg_query_free_deparse_comments_result(result);
+  return ReturnResult(env, comments);
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
@@ -241,6 +410,8 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("fingerprintSync", Napi::Function::New(env, FingerprintSync));
   exports.Set("normalizeSync", Napi::Function::New(env, NormalizeSync));
   exports.Set("scanSync", Napi::Function::New(env, ScanSync));
+  exports.Set("deparseSync", Napi::Function::New(env, DeparseSync));
+  exports.Set("extractCommentsSync", Napi::Function::New(env, ExtractCommentsSync));
   return exports;
 }
 

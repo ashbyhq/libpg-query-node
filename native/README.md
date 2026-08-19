@@ -93,7 +93,7 @@ supportedArchitectures:
 Drop-in replacement for `@libpg-query/parser`:
 
 ```js
-const { parse, parseSync, fingerprint, normalize, scan } = require('@ashbyhq/libpg-query-native');
+const { parse, parseSync, deparse, deparseSync, fingerprint, normalize, scan } = require('@ashbyhq/libpg-query-native');
 
 // Sync (no init needed — native loads instantly)
 const result = parseSync('SELECT id, name FROM users WHERE active = true');
@@ -111,6 +111,157 @@ const result2 = await parse('SELECT id, name FROM users WHERE active = true');
 | `fingerprintSync(sql)` / `fingerprint(sql)` | ✓ | ✓ | 16-char hex fingerprint |
 | `normalizeSync(sql)` / `normalize(sql)` | ✓ | ✓ | Normalized query string |
 | `scanSync(sql)` / `scan(sql)` | ✓ | ✓ | `ScanResult` with tokens |
+| `deparseSync(tree, opts?)` / `deparse(tree, opts?)` | ✓ | ✓ | SQL string |
+| `extractCommentsSync(sql)` / `extractComments(sql)` | ✓ | ✓ | `DeparseComment[]` |
+
+### Deparsing
+
+`deparse()` is the inverse of `parse()`, using PostgreSQL's own deparser rather than a
+reimplementation of it — so its output tracks the server's grammar, and constructs added
+in PG 18 round-trip instead of being silently dropped.
+
+```js
+const { parseSync, deparseSync } = require('@ashbyhq/libpg-query-native');
+
+const tree = parseSync('select a,b   from   t where x=1');
+deparseSync(tree);
+// SELECT a, b FROM t WHERE x = 1
+
+// Edit the tree in between to rewrite a query:
+tree.stmts[0].stmt.SelectStmt.fromClause[0].RangeVar.relname = 'other_table';
+deparseSync(tree);
+// SELECT a, b FROM other_table WHERE x = 1
+```
+
+Encoding is strict: a misspelled field or a bogus enum value throws rather than being
+dropped and deparsed into quietly wrong SQL. Trees the deparser itself rejects throw a
+`SqlError` carrying the failing C function and line.
+
+#### Formatting
+
+`prettyPrint` breaks the statement across lines. The remaining layout options are
+pretty-print options upstream, so they only take effect alongside it.
+
+```js
+const { parseSync, deparseSync } = require('@ashbyhq/libpg-query-native');
+
+const tree = parseSync('select a, b, c from mytable where x = 1 and y = 2');
+deparseSync(tree, { prettyPrint: true, indentSize: 2 });
+// SELECT a, b, c
+// FROM mytable
+// WHERE
+//   x = 1
+//   AND y = 2
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `prettyPrint` | `false` | Break the statement across lines |
+| `indentSize` | `4` | Spaces per indent level |
+| `maxLineLength` | `80` | Soft wrap width for lists of items |
+| `trailingNewline` | `false` | Append a newline after the statement |
+| `commasStartOfLine` | `false` | Put separating commas at the start of the line |
+| `comments` | — | Comments to weave back in (see below) |
+
+#### Comments
+
+Parse trees don't carry comments, so a parse/deparse round trip drops them. Pull them
+off the source first and hand them back:
+
+```js
+const { parseSync, deparseSync, extractCommentsSync } = require('@ashbyhq/libpg-query-native');
+
+const sql = '-- keep me\nSELECT a FROM t';
+deparseSync(parseSync(sql), { comments: extractCommentsSync(sql) });
+// -- keep me
+//  SELECT a FROM t
+```
+
+Each comment carries `matchLocation` (the offset it anchors to), `newlinesBefore`,
+`newlinesAfter` and `text` — filter or rewrite the list before passing it back.
+
+#### Limits and memory
+
+`deparse()` is heavier than `parse()`, in both directions:
+
+- **Nesting depth.** Encoding is recursive, and nesting grows about one level per set
+  operation. The limit is 2000, so a chain of ~2000 `UNION`/`INTERSECT`/`EXCEPT` is the
+  ceiling; past it you get a `RangeError` naming the limit. This is a safety bound, not
+  just a quota — `deparseRawStmt` on the C side has no depth guard of its own.
+- **Peak memory.** `pg_query_deparse_protobuf()` rebuilds the entire tree as Postgres
+  `Node` structs in C, so peak allocation is proportional to tree size — on the order of
+  the parse itself. That is now the whole cost: encoding writes bytes directly and builds
+  no intermediate copy of the tree.
+
+Encoding is a single pass that writes protobuf bytes straight out of the parse tree —
+0.3–17 µs of a 1.0–41 µs deparse. Most of the remaining time was never the SQL
+rendering: profiling put ~90% of the C call inside protobuf-c, which walks the
+descriptor of every message it touches, and pg_query's `Node` has 271 fields with every
+value in a parse tree wrapped in one. Two patches in `patches/` remove that walk from
+both directions — `protobuf_unpack_palloc.patch` unpacks into libpg_query's memory
+context and drops protobuf-c's free pass, and `protobufc_skip_noop_field_loop.patch`
+skips the post-scan field loop for descriptors that have nothing repeated or required.
+Together they take a deparse from 8.0 µs to 3.6 µs on a simple select and from 70 µs to
+43 µs on a 100-column projection.
+
+Against `pgsql-deparser` on a parse→edit→deparse flow: 1.03× on small statements, 1.08×
+on medium — call it parity — and 0.84× on a 100-column projection. The TypeScript
+deparser pays a visitor dispatch per node, so this pulls ahead as trees get broad rather
+than deep; on ordinary statements the two are even.
+
+The allocator caveat from parsing still applies. On a 26 MB parse tree, four
+deparse/settle cycles:
+
+| Allocator | after #1 | #2 | #3 | #4 |
+|-----------|---------|-----|-----|-----|
+| system | 705 MB | 710 MB | 711 MB | **712 MB (flat)** |
+| **jemalloc** | 245 MB | 246 MB | 248 MB | **249 MB** |
+
+Neither plateau ratchets. The system-malloc figure is higher than it was before the
+patches because the unpacked structs now ride the memory context's high-water mark; on
+a sustained realistic workload (126k parse→edit→deparse ops/sec on ordinary statements)
+RSS holds at ~70 MB under both allocators. If you deparse large trees repeatedly, run
+with jemalloc.
+
+**Untrusted input.** Like every other entry point here, `deparse()` runs synchronously on
+the calling thread and has no aggregate size budget — a large tree blocks the event loop
+for the duration (a 26 MB tree is ~500 ms, the same shape as `parse()` on the SQL that
+produced it). The bounded inputs are nesting depth and `DeparseOptions.comments`, capped
+at 1,000,000 entries. If you deparse trees derived from untrusted input, apply your own
+size limit before calling, or run it off the main thread.
+
+#### How the tree gets to the deparser
+
+`pg_query_deparse_protobuf()` takes a protobuf-encoded tree, but `parse()` returns JSON.
+`pg_query.proto` maps between the two with `json_name` annotations — 1,683 of them, which
+is why `SelectStmt` and `targetList` in the JSON correspond to `select_stmt` and
+`target_list` in the schema.
+
+[protobufjs's *converters* ignore `json_name`](https://github.com/protobufjs/protobuf.js/pull/1825),
+which is what made it a dead end for this historically. But its *parser* keeps the
+annotation, exposed as `Field.jsonName`, so `src/proto.ts` drives the mapping itself off
+the descriptor — a key rename, not a fork. That hand-written step is also where strictness
+lives: protobufjs silently drops unknown keys and defaults unrecognised enum names to `0`,
+both of which would yield valid-looking SQL that doesn't match the tree you passed, so the
+remap rejects them instead.
+
+The alternative, [`@bufbuild/protobuf`](https://github.com/bufbuild/protobuf-es), honours
+`json_name` natively and needs no remap — it was the original implementation here. It was
+replaced because it is reflection-driven and allocates two arrays per nested message; on a
+26 MB parse tree (~1.44M messages) that measured ~10× slower. `test/proto.test.js` compares
+the current encoder's output byte-for-byte against bytes recorded from it, so the speedup
+cannot quietly change what libpg_query receives.
+
+The schema descriptor lives in `src/gen/pg_query.json` and is committed, so `npm ci` and
+the platform builds need no protobuf toolchain. Regenerate it when the libpg_query pin
+moves:
+
+```bash
+npm run generate:proto
+```
+
+That refuses to run unless `protos/18/pg_query.proto` matches the pinned tag — a tree
+encoded against a mismatched schema would deparse into wrong SQL rather than fail loudly.
 
 ## Using jemalloc for optimal memory
 
