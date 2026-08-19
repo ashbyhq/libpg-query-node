@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787098173831,
+  "lastUpdate": 1787099181504,
   "repoUrl": "https://github.com/ashbyhq/libpg-query-node",
   "entries": {
     "native libpg-query (linux-x64, jemalloc)": [
@@ -175,6 +175,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Small query latency",
             "value": 14.788,
+            "unit": "us/parse"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "jeff@ashbyhq.com",
+            "name": "Jeff Lubetkin",
+            "username": "jefflub-ashby"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cba28c2ff3f81a6414ccc94a0f42ca4bd4144ce2",
+          "message": "Merge pull request #7 from ashbyhq/jeff/release-0.2.0\n\nnative: release 0.2.0",
+          "timestamp": "2026-08-18T17:24:48-07:00",
+          "tree_id": "e7991e9de6478cb3970069e65bb2b0d74a64b256",
+          "url": "https://github.com/ashbyhq/libpg-query-node/commit/cba28c2ff3f81a6414ccc94a0f42ca4bd4144ce2"
+        },
+        "date": 1787099180840,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Large query parse time",
+            "value": 1051.4,
+            "unit": "ms"
+          },
+          {
+            "name": "Large query peak RSS",
+            "value": 461.5,
+            "unit": "MB"
+          },
+          {
+            "name": "Large query retained RSS",
+            "value": 291.4,
+            "unit": "MB"
+          },
+          {
+            "name": "Small query latency",
+            "value": 12.94,
             "unit": "us/parse"
           }
         ]
