@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786391585667,
+  "lastUpdate": 1787098173831,
   "repoUrl": "https://github.com/ashbyhq/libpg-query-node",
   "entries": {
     "native libpg-query (linux-x64, jemalloc)": [
@@ -131,6 +131,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Small query latency",
             "value": 14.901,
+            "unit": "us/parse"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "jeff@ashbyhq.com",
+            "name": "Jeff Lubetkin",
+            "username": "jefflub-ashby"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e8726cf12c25207fd0e19f88b092538e04489f84",
+          "message": "Merge pull request #5 from ashbyhq/benasher44/deparse-native\n\nnative: add deparse",
+          "timestamp": "2026-08-18T17:08:04-07:00",
+          "tree_id": "04b7ca6042013f15400fa53600bc9425a329758e",
+          "url": "https://github.com/ashbyhq/libpg-query-node/commit/e8726cf12c25207fd0e19f88b092538e04489f84"
+        },
+        "date": 1787098172840,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Large query parse time",
+            "value": 1157.1,
+            "unit": "ms"
+          },
+          {
+            "name": "Large query peak RSS",
+            "value": 456.1,
+            "unit": "MB"
+          },
+          {
+            "name": "Large query retained RSS",
+            "value": 286.6,
+            "unit": "MB"
+          },
+          {
+            "name": "Small query latency",
+            "value": 14.788,
             "unit": "us/parse"
           }
         ]
