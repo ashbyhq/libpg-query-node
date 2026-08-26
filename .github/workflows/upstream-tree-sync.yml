@@ -17,6 +17,9 @@ permissions:
 env:
   UPSTREAM_REPO: https://github.com/constructive-io/libpg-query-node.git
   UPSTREAM_BRANCH: main
+  # Where upstream pins its C library. This fork deletes the path, so it is only ever read out of
+  # upstream's history, never the worktree.
+  UPSTREAM_MAKEFILE: versions/18/Makefile
 
 jobs:
   sync:
@@ -60,15 +63,20 @@ jobs:
         run: echo "::notice::Already up to date with upstream. Nothing to do."
 
       - id: state
-        name: Record pre-merge C-source pin
+        name: Record upstream's C-source pin before the merge
         if: ${{ steps.fetch.outputs.behind != '0' }}
         run: |
           set -euo pipefail
-          before_repo=$(git show HEAD:native/Makefile 2>/dev/null | sed -n 's/^LIBPG_QUERY_REPO *:*= *//p' | head -1 || true)
-          before_tag=$(git show HEAD:native/Makefile 2>/dev/null | sed -n 's/^LIBPG_QUERY_TAG *:*= *//p' | head -1 || true)
+          # The merge base is the last upstream commit already merged here, so its pin is the one
+          # a human last looked at. Reading our own native/Makefile instead would compare the pin
+          # to itself: upstream never touches native/, so it could never report a change.
+          base=$(git merge-base HEAD upstream/"$UPSTREAM_BRANCH")
+          before_repo=$(git show "$base:$UPSTREAM_MAKEFILE" 2>/dev/null | sed -n 's/^LIBPG_QUERY_REPO *:*= *//p' | head -1 || true)
+          before_tag=$(git show "$base:$UPSTREAM_MAKEFILE" 2>/dev/null | sed -n 's/^LIBPG_QUERY_TAG *:*= *//p' | head -1 || true)
+          echo "base-sha=${base}" >> "$GITHUB_OUTPUT"
           echo "before-repo=${before_repo}" >> "$GITHUB_OUTPUT"
           echo "before-tag=${before_tag}" >> "$GITHUB_OUTPUT"
-          echo "Before: ${before_repo} @ ${before_tag}"
+          echo "Before: ${before_repo:-(not found)} @ ${before_tag:-(not found)}"
 
       - id: merge
         name: Merge upstream
@@ -202,9 +210,15 @@ jobs:
           BEFORE_TAG: ${{ steps.state.outputs.before-tag }}
         run: |
           set -euo pipefail
-          after_repo=$(sed -n 's/^LIBPG_QUERY_REPO *:*= *//p' native/Makefile | head -1 || true)
-          after_tag=$(sed -n 's/^LIBPG_QUERY_TAG *:*= *//p' native/Makefile | head -1 || true)
-          echo "After: ${after_repo} @ ${after_tag}"
+          after_repo=$(git show "upstream/$UPSTREAM_BRANCH:$UPSTREAM_MAKEFILE" 2>/dev/null | sed -n 's/^LIBPG_QUERY_REPO *:*= *//p' | head -1 || true)
+          after_tag=$(git show "upstream/$UPSTREAM_BRANCH:$UPSTREAM_MAKEFILE" 2>/dev/null | sed -n 's/^LIBPG_QUERY_TAG *:*= *//p' | head -1 || true)
+          echo "After: ${after_repo:-(not found)} @ ${after_tag:-(not found)}"
+
+          # Both empty means the pin has stopped being where we look for it, and the comparison
+          # below would quietly succeed forever. Say so rather than report "no change".
+          if [ -z "$after_tag" ] && [ -z "$BEFORE_TAG" ]; then
+            echo "::warning::No C-source pin found at ${UPSTREAM_MAKEFILE} on either side — upstream layout changed, this check is no longer looking at anything."
+          fi
 
           if [ "$after_repo" != "$BEFORE_REPO" ] || [ "$after_tag" != "$BEFORE_TAG" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -227,6 +241,7 @@ jobs:
           CSOURCE_CHANGED: ${{ steps.csource.outputs.changed }}
           BEFORE_REPO: ${{ steps.state.outputs.before-repo }}
           BEFORE_TAG: ${{ steps.state.outputs.before-tag }}
+          BASE_SHA: ${{ steps.state.outputs.base-sha }}
           AFTER_REPO: ${{ steps.csource.outputs.after-repo }}
           AFTER_TAG: ${{ steps.csource.outputs.after-tag }}
         run: |
@@ -293,8 +308,8 @@ jobs:
               echo ""
               echo "| | Repo | Tag |"
               echo "|---|---|---|"
-              echo "| Before | \`${BEFORE_REPO}\` | \`${BEFORE_TAG}\` |"
-              echo "| After | \`${AFTER_REPO}\` | \`${AFTER_TAG}\` |"
+              echo "| Before | \`${BEFORE_REPO:-(not found)}\` | \`${BEFORE_TAG:-(not found)}\` |"
+              echo "| After | \`${AFTER_REPO:-(not found)}\` | \`${AFTER_TAG:-(not found)}\` |"
               echo ""
               echo "This fork deliberately builds from **pganalyze** release tags, not"
               echo "upstream's \`*-constructive\` branch. Revisit that choice only on purpose —"
@@ -302,7 +317,7 @@ jobs:
               echo ""
             fi
 
-            echo "- Compare: https://github.com/constructive-io/libpg-query-node/compare/${BEFORE_TAG:-main}...${UPSTREAM_SHA}"
+            echo "- Compare: https://github.com/constructive-io/libpg-query-node/compare/${BASE_SHA}...${UPSTREAM_SHA}"
             echo ""
             if [ "$HAS_PAT" != "true" ]; then
               echo "> [!WARNING]"
