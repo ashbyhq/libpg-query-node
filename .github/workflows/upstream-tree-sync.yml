@@ -96,30 +96,64 @@ jobs:
             exit 0
           fi
 
-          # The fork deletes upstream's WASM workflows and packages, and upstream
-          # keeps editing them, so every sync produces "deleted by us" (DU)
-          # conflicts. Escalating those to a human each time would make this
-          # useless — the standing intent is to keep the deletion. Anything else
-          # still stops.
-          OTHER=$(git status --porcelain | grep -E '^(DD|AU|UD|UA|AA|UU)' || true)
-          DU_FILES=$(git status --porcelain | sed -n 's/^DU //p')
+          # Two standing intents let most of this resolve without a human, because the
+          # answer is the same every month and escalating it would make the automation
+          # useless:
+          #
+          #   FORK_DELETES  paths the fork removed outright. Upstream keeps editing them;
+          #                 the deletion stands whatever it did.
+          #   FORK_OWNS     paths the fork rewrote or authored. Ours stands whatever
+          #                 upstream did — for these, "ours" is sometimes "absent".
+          #
+          # Both are applied by path rather than by conflict class, because the class
+          # varies with what upstream happened to do (DU, DD, AU, UA, UD all show up for
+          # the same standing decision, and rename detection moves files between them).
+          # A conflict on any path outside both sets is a real decision and still stops.
+          FORK_DELETES='^(versions|parser|full|templates|types|enums|protos|scripts)/|^(LOADING_WASM\.md|tsconfig\.json|\.npmrc)$|^pnpm-[^/]*\.ya?ml$|^\.github/workflows/(ci|build-wasm|build-wasm-no-docker)\.ya?ml$'
+          FORK_OWNS='^(native|\.github|\.vscode)/|^(README|PUBLISH|REPO_NOTES)\.md$|^(package\.json|LICENSE|\.gitignore)$'
 
-          if [ -n "$OTHER" ] || [ -z "$DU_FILES" ]; then
-            # A real content conflict, or something we do not recognise. Do not guess.
+          unresolved=""
+          # No pipe into the loop: it has to run in this shell so $unresolved survives.
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            path=${line#* }
+
+            if printf '%s' "$path" | grep -qE "$FORK_DELETES"; then
+              git rm -qrf --ignore-unmatch -- "$path" >/dev/null 2>&1 || true
+              rm -rf -- "$path"
+              echo "deleted: $path" >> /tmp/autoresolved.txt
+            elif printf '%s' "$path" | grep -qE "$FORK_OWNS"; then
+              if git checkout --ours -- "$path" >/dev/null 2>&1; then
+                git add -- "$path"
+              else
+                # No "ours" side: upstream added this at a path we own, so ours is absent.
+                git rm -qrf --ignore-unmatch -- "$path" >/dev/null 2>&1 || true
+              fi
+              echo "kept ours: $path" >> /tmp/autoresolved.txt
+            else
+              unresolved="${unresolved}${path}"$'\n'
+            fi
+          done <<EOF
+          $(git status --porcelain | grep -E '^(DD|AU|UD|UA|AA|UU|DU)' || true)
+          EOF
+
+          if [ -n "$unresolved" ]; then
+            # Something outside both standing intents. Do not guess.
             echo "conflict=true" >> "$GITHUB_OUTPUT"
-            git diff --name-only --diff-filter=U > /tmp/conflicts.txt || true
+            printf '%s' "$unresolved" | sed '/^ *$/d' > /tmp/conflicts.txt
             echo "Unresolvable conflicts:"; cat /tmp/conflicts.txt
             git merge --abort || true
             exit 0
           fi
 
-          printf '%s\n' "$DU_FILES" | while IFS= read -r f; do
-            [ -n "$f" ] || continue
-            echo "Keeping our deletion of $f"
-            git rm -q --cached -- "$f" 2>/dev/null || true
-            rm -f -- "$f"
-            echo "$f" >> /tmp/autoresolved.txt
-          done
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            echo "::error::Conflicts remain after auto-resolution."
+            git diff --name-only --diff-filter=U > /tmp/conflicts.txt
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            git merge --abort || true
+            exit 0
+          fi
+
           git commit -q --no-edit
           echo "conflict=false" >> "$GITHUB_OUTPUT"
 
@@ -137,12 +171,20 @@ jobs:
             fi
           }
 
-          for dir in versions parser full templates types enums protos; do
+          # Same set as FORK_DELETES in the merge step, for paths upstream reintroduces
+          # without a conflict. Keep the two in step.
+          for dir in versions parser full templates types enums protos scripts; do
             strip "$dir"
           done
           strip LOADING_WASM.md
-          strip pnpm-lock.yaml
-          strip pnpm-workspace.yaml
+          strip tsconfig.json
+          strip .npmrc
+          # Glob rather than a fixed list: upstream keeps adding pnpm config files
+          # (pnpm-policy.yaml showed up this way), and none of them apply to a repo
+          # with no pnpm workspace left.
+          for f in pnpm-*.yaml pnpm-*.yml; do
+            [ -e "$f" ] && strip "$f"
+          done
 
           for wf in ci.yml build-wasm.yml build-wasm-no-docker.yaml; do
             strip ".github/workflows/$wf"
@@ -173,10 +215,11 @@ jobs:
             echo ""
             while read -r f; do [ -n "$f" ] && echo "- \`$f\`"; done < /tmp/conflicts.txt
             echo ""
-            echo "The fork's conflict surface is normally small: it modifies one upstream"
-            echo "file (\`README.md\`) and deletes upstream's WASM workflows and packages, so"
-            echo "most conflicts are delete/modify on \`.github/workflows/{ci,build-wasm,...}\`,"
-            echo "\`versions/\`, \`parser/\`, etc., and are resolved by keeping the deletion."
+            echo "Conflicts on paths the fork deletes (\`versions/\`, \`parser/\`, the WASM"
+            echo "workflows, ...) or owns (\`native/\`, \`README.md\`, \`PUBLISH.md\`,"
+            echo "\`REPO_NOTES.md\`, \`package.json\`) resolve automatically. Reaching this"
+            echo "issue means upstream changed something outside both sets, which is a real"
+            echo "decision — see the list above."
             echo ""
             echo "Resolve locally:"
             echo ""
