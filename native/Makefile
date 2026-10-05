@@ -1,5 +1,5 @@
 LIBPG_QUERY_REPO := https://github.com/pganalyze/libpg_query.git
-LIBPG_QUERY_TAG := 18.0.0
+LIBPG_QUERY_TAG := 18.1.0
 
 OS := $(shell uname -s)
 ARCH := $(shell uname -m)
