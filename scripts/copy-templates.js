@@ -28,22 +28,27 @@ function loadVersionConfigs() {
   console.log(`Found ${packageFiles.length} package.json files\n`);
   
   packageFiles.forEach(packageFile => {
-    try {
-      const packageData = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
-      const version = packageData['x-publish']?.pgVersion;
-      const libpgQueryTag = packageData['x-publish']?.libpgQueryTag;
-      
-      if (version && libpgQueryTag) {
-        configs[version] = {
-          tag: libpgQueryTag,
-          hasEmscriptenPatch: version === '13' // Only version 13 needs the patch
-        };
-        console.log(`  Version ${version}: tag ${libpgQueryTag}`);
-      } else {
-        console.warn(`  Warning: Missing x-publish data in ${packageFile}`);
+    const packageData = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
+    const version = packageData['x-publish']?.pgVersion;
+    const libpgQueryTag = packageData['x-publish']?.libpgQueryTag;
+    const libpgQueryRepo = packageData['x-publish']?.libpgQueryRepo;
+    const libpgQueryCommit = packageData['x-publish']?.libpgQueryCommit;
+    const fullApi = packageData['x-publish']?.fullApi === true;
+    
+    if (version && libpgQueryTag) {
+      if (!libpgQueryRepo || !/^[0-9a-f]{40}$/.test(libpgQueryCommit || '')) {
+        throw new Error(`${packageFile}: x-publish needs libpgQueryRepo and a full 40-char libpgQueryCommit`);
       }
-    } catch (error) {
-      console.error(`  Error reading ${packageFile}: ${error.message}`);
+      configs[version] = {
+        tag: libpgQueryTag,
+        repo: libpgQueryRepo,
+        commit: libpgQueryCommit,
+        hasEmscriptenPatch: version === '13', // Only version 13 needs the patch
+        fullApi
+      };
+      console.log(`  Version ${version}: ${libpgQueryTag} @ ${libpgQueryCommit.slice(0, 7)}${fullApi ? ' (full API)' : ''}`);
+    } else {
+      console.warn(`  Warning: Missing x-publish data in ${packageFile}`);
     }
   });
   
@@ -54,13 +59,17 @@ function loadVersionConfigs() {
 // Load configurations
 const VERSION_CONFIGS = loadVersionConfigs();
 
-// Files to copy from templates
+// Files to copy from templates. Full-API versions use the variants in
+// templates/full/ for the source files.
 const TEMPLATE_FILES = [
-  { src: 'LICENSE', dest: 'LICENSE', header: false },
-  { src: 'wasm_wrapper.c', dest: 'src/wasm_wrapper.c', header: HEADER },
-  { src: 'libpg-query.d.ts', dest: 'src/libpg-query.d.ts', header: HEADER },
-  { src: 'index.ts', dest: 'src/index.ts', header: HEADER }
+  { src: 'LICENSE', dest: 'LICENSE', header: false, hasFullVariant: false },
+  { src: 'wasm_wrapper.c', dest: 'src/wasm_wrapper.c', header: HEADER, hasFullVariant: true },
+  { src: 'libpg-query.d.ts', dest: 'src/libpg-query.d.ts', header: HEADER, hasFullVariant: true },
+  { src: 'index.ts', dest: 'src/index.ts', header: HEADER, hasFullVariant: true }
 ];
+
+const SLIM_EXPORTED_FUNCTIONS = "['_malloc','_free','_wasm_parse_query_raw','_wasm_free_parse_result']";
+const FULL_EXPORTED_FUNCTIONS = "['_malloc','_free','_wasm_parse_query','_wasm_parse_plpgsql','_wasm_fingerprint','_wasm_normalize_query','_wasm_scan','_wasm_parse_query_detailed','_wasm_free_detailed_result','_wasm_free_string','_wasm_parse_query_raw','_wasm_free_parse_result']";
 
 function copyTemplates() {
   const templatesDir = path.join(__dirname, '..', 'templates');
@@ -73,7 +82,9 @@ function copyTemplates() {
     
     // Copy template files
     for (const file of TEMPLATE_FILES) {
-      const srcPath = path.join(templatesDir, file.src);
+      const srcPath = (config.fullApi && file.hasFullVariant)
+        ? path.join(templatesDir, 'full', file.src)
+        : path.join(templatesDir, file.src);
       const destPath = path.join(versionDir, file.dest);
       
       // Ensure destination directory exists
@@ -98,6 +109,12 @@ function copyTemplates() {
     // Process Makefile template
     const makefileTemplate = fs.readFileSync(path.join(templatesDir, 'Makefile.template'), 'utf8');
     let makefileContent = makefileTemplate.replace(/{{VERSION_TAG}}/g, config.tag);
+    makefileContent = makefileContent.replace(/{{LIBPG_QUERY_REPO}}/g, config.repo);
+    makefileContent = makefileContent.replace(/{{LIBPG_QUERY_COMMIT}}/g, config.commit);
+    makefileContent = makefileContent.replace(
+      /{{EXPORTED_FUNCTIONS}}/g,
+      config.fullApi ? FULL_EXPORTED_FUNCTIONS : SLIM_EXPORTED_FUNCTIONS
+    );
     
     // Handle the USE_EMSCRIPTEN_PATCH placeholder
     if (config.hasEmscriptenPatch) {
@@ -120,7 +137,7 @@ function copyTemplates() {
     
     // Write Makefile with header
     fs.writeFileSync(path.join(versionDir, 'Makefile'), MAKEFILE_HEADER + makefileContent);
-    console.log(`  ✓ Generated Makefile with tag ${config.tag}`);
+    console.log(`  ✓ Generated Makefile with ${config.tag} @ ${config.commit.slice(0, 7)}`);
   }
   
   console.log('\n✅ Template copying completed!');

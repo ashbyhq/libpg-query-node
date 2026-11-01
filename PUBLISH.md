@@ -1,5 +1,31 @@
 # Publishing Guide
 
+## Keeping the C source in sync
+
+Each `versions/<n>/package.json` pins its libpg_query source in `x-publish`
+(`libpgQueryRepo`, `libpgQueryTag`, `libpgQueryCommit`), and the Docker build uses
+`emscripten/emsdk:6.0.3`. Every generated Makefile and the protobufs come from those pins,
+and the pins ship in the published package.json.
+
+To move a version to new C code, do all of this in one commit:
+
+```bash
+# 1. edit x-publish.libpgQueryCommit (full 40-char SHA) in versions/<n>/package.json
+pnpm copy:templates   # regenerate the Makefiles
+pnpm fetch:protos     # protos/<n>/pg_query.proto at the new commit
+pnpm build:types && pnpm build:enums
+cd versions/<n> && pnpm build && pnpm test
+```
+
+If you skip the build when publishing, `versions/<n>/wasm/` must have been built after the
+last pin change, or the package will name one commit and ship another. After publishing,
+`npm view libpg-query@pg<n> x-publish` should show the commit you expect.
+
+`publish:pkg` also writes `x-publish.wasmSha256`, the sha256 of `wasm/libpg-query.wasm` and
+`wasm/libpg-query.js`, into the published package.json. To verify a release, check out the
+`gitHead` it was published from, run `pnpm wasm:build` in `versions/<n>`, and compare
+`sha256sum wasm/libpg-query.*` with `npm view libpg-query@<version> x-publish.wasmSha256`.
+
 ## Automated Publishing (Recommended)
 
 ### Version Packages (libpg-query)
@@ -10,12 +36,11 @@ pnpm run publish:versions
 This interactive script will:
 - Check for uncommitted changes (will error if any exist)
 - Let you select which versions to publish (or all)
-- Also includes the full package (@libpg-query/parser)
 - Ask for version bump type (patch or minor only)
 - Ask if you want to skip the build step (useful if already built)
 - Always run tests (even if build is skipped)
 - Publish each selected version
-- Optionally promote pg17 to latest
+- If the highest major (pg18) was published, optionally promote it to `latest`
 
 ### Types Packages
 ```bash
@@ -55,16 +80,6 @@ PARSER_BUILD_TYPE=full pnpm run publish:parser
 #### LTS Build (versions 15-18)
 ```bash
 PARSER_BUILD_TYPE=lts pnpm run publish:parser
-```
-
-#### Latest Only (version 17)
-```bash
-PARSER_BUILD_TYPE=latest pnpm run publish:parser
-```
-
-#### Legacy Build (versions 13-15)
-```bash
-PARSER_BUILD_TYPE=legacy pnpm run publish:parser
 ```
 
 This command will:
@@ -163,32 +178,45 @@ npm install libpg-query@pg16   # PostgreSQL 16 specific
 npm install libpg-query        # Latest/default version
 ```
 
-## Full Package (@libpg-query/parser)
+## Full API on PG 18+
 
-### Quick Publish
+The former `full/` package (`@libpg-query/parser`) has been retired. Starting with
+PostgreSQL 18, the regular `libpg-query` package (`versions/18`) ships the full API:
+`parse`, `parsePlPgSQL`, `scan`, `fingerprint`, `normalize` + sync variants.
+Versions 13–17 remain slim (parse only).
+
 ```bash
-cd full
-pnpm version patch
-git add . && git commit -m "release: bump @libpg-query/parser version"
-pnpm build
-pnpm test
-pnpm publish --tag pg17
+npm install libpg-query@pg18   # full API
+npm install libpg-query@pg17   # parse only
 ```
 
-### Promote to latest (optional)
+## WASM memory defaults
+
+Every major builds with `WASM_INITIAL_MEMORY=41943040` (40MiB),
+`WASM_STACK_SIZE=33554432` (32MiB) and `WASM_MAXIMUM_MEMORY=1073741824` (1GiB),
+set in `templates/Makefile.template`. The initial size is only the floor: the
+heap grows on demand up to the maximum, so it decides the idle footprint of a
+parser instance (about 42MiB of V8 `external` memory), not the largest input it
+can parse. The 32MiB stack is what prevents deep-recursion traps, and untouched
+stack pages cost no resident memory, so it is never lowered.
+
+There are no separate low-memory releases. If a downstream user needs an ad-hoc
+build with a different floor, override it on the build line and keep the stack:
+
 ```bash
-npm dist-tag add @libpg-query/parser@pg17 latest
+pnpm wasm:make build WASM_INITIAL_MEMORY=50331648   # 48MiB floor; never set WASM_STACK_SIZE below 33554432
 ```
 
-### What it does
-- Publishes `@libpg-query/parser` with tag `pg17`
-- Currently based on PostgreSQL 17
-- Includes full parser with all features
+### Later, separate step: retire the `pg18-lowmem-*` dist-tags
 
-### Install published package
+The `pg18-lowmem-16/-32/-64` tags point at pre-`18.2.x` builds with 4/8MiB
+stacks. Do this only after downstream users (Supabase) have been notified; it
+is not part of a release:
+
 ```bash
-npm install @libpg-query/parser@pg17   # PostgreSQL 17 specific
-npm install @libpg-query/parser        # Latest version
+npm dist-tag rm libpg-query pg18-lowmem-16
+npm dist-tag rm libpg-query pg18-lowmem-32
+npm dist-tag rm libpg-query pg18-lowmem-64
 ```
 
 ## Parser Package (@pgsql/parser)
@@ -208,19 +236,15 @@ pnpm publish
 The parser package is now a simple distribution package that copies pre-built WASM files. No TypeScript compilation needed!
 
 #### Available Build Types:
-- **full**: All versions (13, 14, 15, 16, 17) - Default
-- **lts**: LTS versions only (16, 17)
-- **latest**: Latest version only (17)
-- **legacy**: Legacy versions (13, 14, 15)
+- **full**: All versions (13, 14, 15, 16, 17, 18) - Default
+- **lts**: LTS versions only (15, 16, 17, 18)
 
 ```bash
 # Full build (default)
 npm run build
 
-# Specific builds
+# LTS build
 npm run build:lts
-npm run build:latest
-npm run build:legacy
 
 # Or using environment variable
 PARSER_BUILD_TYPE=lts npm run build
@@ -242,11 +266,11 @@ The templates automatically adjust to include only the versions specified in the
 **Important**: Before building the parser package, ensure that the version packages are built first:
 ```bash
 # Build all version packages first
-pnpm build  # builds libpg-query versions
+pnpm build:versions
 
 # Then build the parser with desired configuration
 cd parser
-npm run build:lts  # or build:full, build:latest, etc.
+npm run build:lts  # or build:full
 ```
 
 ### Types Bundling
@@ -266,10 +290,6 @@ npm publish
 # Publish LTS version with lts tag
 npm run build:lts
 npm publish --tag lts
-
-# Publish legacy version with legacy tag
-npm run build:legacy
-npm publish --tag legacy
 ```
 
 ### What it does
@@ -284,12 +304,6 @@ npm publish --tag legacy
 ```bash
 # Install latest (full build)
 npm install @pgsql/parser
-
-# Install LTS version
-npm install @pgsql/parser@lts
-
-# Install legacy version
-npm install @pgsql/parser@legacy
 
 # Use version-specific imports:
 # import { parse } from '@pgsql/parser/v17'

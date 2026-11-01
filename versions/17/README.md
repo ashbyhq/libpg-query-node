@@ -59,7 +59,7 @@ Our latest is built with the `18-latest` branch from libpg_query
 | PG Major Version | libpg_query | npm dist-tag 
 |--------------------------|-------------|---------|
 | 18                       | 18.0.0      | [`pg18`](https://www.npmjs.com/package/libpg-query/v/pg18)
-| 17                       | 17-6.1.0    | [`pg17`](https://www.npmjs.com/package/libpg-query/v/latest)
+| 17                       | 17-6.1.0    | [`pg17`](https://www.npmjs.com/package/libpg-query/v/pg17)
 | 16                       | 16-5.2.0    | [`pg16`](https://www.npmjs.com/package/libpg-query/v/pg16)
 | 15                       | 15-4.2.4    | [`pg15`](https://www.npmjs.com/package/libpg-query/v/pg15)
 | 14                       | 14-3.0.0    | [`pg14`](https://www.npmjs.com/package/libpg-query/v/pg14)
@@ -89,7 +89,7 @@ const result = parseSync('SELECT * FROM users WHERE active = true');
 // Returns: ParseResult - parsed query object
 ```
 
-⚠ **Note:** If you need additional functionality like `fingerprint`, `scan`, `deparse`, or `normalize`, check out the full package (`@libpg-query/parser`) in the [./full](https://github.com/constructive-io/libpg-query-node/tree/main/full) folder of the repo.
+⚠ **Note:** This package only parses. For `fingerprint`, `normalize`, `scan` and `parsePlPgSQL`, upgrade to [`libpg-query@pg18`](https://www.npmjs.com/package/libpg-query/v/pg18).
 
 ### Initialization
 
@@ -133,6 +133,18 @@ const result = parseSync('SELECT * FROM users');
 ```
 
 Note: We recommend using async methods as they handle initialization automatically. Use sync methods only when necessary, and always call `loadModule()` first.
+
+### `loadModule({ wasm }): Promise<void>`
+
+For hosts where the wrapper cannot read `libpg-query.wasm` itself (for example a custom protocol without fetch support), pass the file's bytes or a compiled `WebAssembly.Module`. It is compiled once, and every later instance is created from it. Pass only the `libpg-query.wasm` shipped with this package (or bytes you trust as much): whatever you pass runs as the parser.
+
+```typescript
+import { loadModule, parseSync } from 'libpg-query';
+import wasm from 'libpg-query/wasm/libpg-query.wasm'; // bytes, via your bundler's binary loader
+
+await loadModule({ wasm });
+const result = parseSync('SELECT * FROM users');
+```
 
 ### Type Definitions
 
