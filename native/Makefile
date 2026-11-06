@@ -33,7 +33,7 @@ endif
 # PLATFORM_KEY can be overridden (e.g. `make build PLATFORM_KEY=linux-x64-musl`)
 # so CI can pin the output dir to the known target instead of relying on detection.
 PLATFORM_KEY ?= $(PLATFORM)-$(NODE_ARCH)$(PLATFORM_SUFFIX)
-CACHE_DIR := .cache/$(PLATFORM_KEY)
+CACHE_DIR := .cache/$(PLATFORM_KEY)/$(LIBPG_QUERY_TAG)
 LIBPG_QUERY_DIR := $(CACHE_DIR)/libpg_query
 
 LIBPG_QUERY_LIB := $(LIBPG_QUERY_DIR)/libpg_query.a
