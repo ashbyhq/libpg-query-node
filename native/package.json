@@ -1,6 +1,6 @@
 {
   "name": "@ashbyhq/libpg-query-native",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "PostgreSQL query parser — native N-API + jemalloc backend",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -56,7 +56,7 @@
   },
   "x-upstream": {
     "libpgQueryRepo": "https://github.com/pganalyze/libpg_query.git",
-    "libpgQueryTag": "18.0.0",
+    "libpgQueryTag": "18.1.0",
     "pgMajor": "18",
     "constructiveBaseSha": "74ed197bde234ede243e66f47a417a6017c563d2"
   }
