@@ -30,10 +30,10 @@
     "build:dev": "pnpm run clean && tsc --declarationMap && tsc -p tsconfig.esm.json && pnpm run copy",
     "build:proto": "ts-node scripts/pg-proto-parser",
     "prepare:enums": "node -e \"require('../../scripts/prepare-enums.js').preparePackageForPublish('.')\"",
-    "lint": "eslint . --fix"
+    "lint": "oxlint ."
   },
   "keywords": [],
   "devDependencies": {
-    "pg-proto-parser": "^1.28.2"
+    "pg-proto-parser": "^1.32.6"
   }
 }

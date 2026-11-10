@@ -31,7 +31,7 @@
     "url": "git://github.com/constructive-io/libpg-query-node.git"
   },
   "devDependencies": {
-    "@yamlize/cli": "^0.8.0"
+    "@yamlize/cli": "^0.11.5"
   },
   "dependencies": {
     "@pgsql/types": "^18.0.0"
