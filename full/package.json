@@ -21,17 +21,13 @@
     "wasm:rebuild": "pnpm wasm:make rebuild",
     "wasm:clean": "pnpm wasm:make clean",
     "wasm:clean-cache": "pnpm wasm:make clean-cache",
-    "test": "node --test test/parsing.test.js test/fingerprint.test.js test/normalize.test.js test/plpgsql.test.js test/scan.test.js test/errors.test.js",
-    "yamlize": "node ./scripts/yamlize.js"
+    "test": "node --test test/parsing.test.js test/fingerprint.test.js test/normalize.test.js test/plpgsql.test.js test/scan.test.js test/errors.test.js"
   },
   "author": "Constructive <developers@constructive.io>",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git://github.com/constructive-io/libpg-query-node.git"
-  },
-  "devDependencies": {
-    "@yamlize/cli": "^0.11.5"
   },
   "dependencies": {
     "@pgsql/types": "^18.0.0"
