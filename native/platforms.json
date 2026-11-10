@@ -2,7 +2,7 @@
   "darwin-arm64": {
     "os": ["darwin"],
     "cpu": ["arm64"],
-    "runner": "macos-14"
+    "runner": "macos-15"
   },
   "linux-x64": {
     "os": ["linux"],
