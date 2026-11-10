@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787099181504,
+  "lastUpdate": 1794336038456,
   "repoUrl": "https://github.com/ashbyhq/libpg-query-node",
   "entries": {
     "native libpg-query (linux-x64, jemalloc)": [
@@ -219,6 +219,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Small query latency",
             "value": 12.94,
+            "unit": "us/parse"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "benasher44@gmail.com",
+            "name": "Ben Asher",
+            "username": "benasher44"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "64481b79064275ba303500925bd89cad374836ae",
+          "message": "Merge pull request #9 from ashbyhq/chore/dependabot-security-upgrades\n\nchore: resolve all 18 Dependabot security alerts",
+          "timestamp": "2026-11-10T10:39:19-08:00",
+          "tree_id": "0ae03c8a0a209cc72e92b4c5e2345add2d55e1af",
+          "url": "https://github.com/ashbyhq/libpg-query-node/commit/64481b79064275ba303500925bd89cad374836ae"
+        },
+        "date": 1794336038045,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Large query parse time",
+            "value": 1468.9,
+            "unit": "ms"
+          },
+          {
+            "name": "Large query peak RSS",
+            "value": 412.8,
+            "unit": "MB"
+          },
+          {
+            "name": "Large query retained RSS",
+            "value": 267.8,
+            "unit": "MB"
+          },
+          {
+            "name": "Small query latency",
+            "value": 14.702,
             "unit": "us/parse"
           }
         ]
