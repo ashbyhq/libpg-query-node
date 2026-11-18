@@ -3,6 +3,9 @@
   "private": true,
   "description": "PostgreSQL query parser monorepo",
   "packageManager": "pnpm@8.15.0",
+  "engines": {
+    "node": "^26.13.0"
+  },
   "scripts": {
     "build": "pnpm --filter libpg-query build",
     "test": "pnpm --filter libpg-query test",
@@ -32,7 +35,7 @@
     "publish:parser": "pnpm --filter @pgsql/parser publish"
   },
   "devDependencies": {
-    "@types/node": "^24.19.2",
+    "@types/node": "^26.6.6",
     "copyfiles": "^2.4.1",
     "glob": "14.0.4",
     "oxlint": "1.93.0",
@@ -43,7 +46,7 @@
   },
   "pnpm": {
     "overrides": {
-      "@types/node": "^24.19.2",
+      "@types/node": "^26.6.6",
       "deepmerge": "4.1.2",
       "strfy-js>minimatch": "11.0.5"
     },

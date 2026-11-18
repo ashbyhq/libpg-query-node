@@ -150,6 +150,8 @@ describe("Deparsing", () => {
         (error) => {
           assert.ok(error instanceof RangeError);
           assert.match(error.message, /nests too deeply/);
+          // Distinguish our depth guard from V8 stack exhaustion on each runtime.
+          assert.equal(error.cause?.message, "nesting exceeds 2000");
           return true;
         }
       );
