@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794336038456,
+  "lastUpdate": 1795042581595,
   "repoUrl": "https://github.com/ashbyhq/libpg-query-node",
   "entries": {
     "native libpg-query (linux-x64, jemalloc)": [
@@ -263,6 +263,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Small query latency",
             "value": 14.702,
+            "unit": "us/parse"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "benasher44@gmail.com",
+            "name": "Ben Asher",
+            "username": "benasher44"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "db94a97c4a5df12292babf8ae1e73ffb5233a57a",
+          "message": "chore: migrate to Node 26 (#10)",
+          "timestamp": "2026-11-18T14:55:03-08:00",
+          "tree_id": "2ec615a848976ed7fdba4d87df6c524dd5275dfa",
+          "url": "https://github.com/ashbyhq/libpg-query-node/commit/db94a97c4a5df12292babf8ae1e73ffb5233a57a"
+        },
+        "date": 1795042580925,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Large query parse time",
+            "value": 1428.8,
+            "unit": "ms"
+          },
+          {
+            "name": "Large query peak RSS",
+            "value": 375.7,
+            "unit": "MB"
+          },
+          {
+            "name": "Large query retained RSS",
+            "value": 226.5,
+            "unit": "MB"
+          },
+          {
+            "name": "Small query latency",
+            "value": 14.422,
             "unit": "us/parse"
           }
         ]
