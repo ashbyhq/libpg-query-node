@@ -21,13 +21,13 @@
     "cpu": ["x64"],
     "libc": ["musl"],
     "runner": "ubuntu-24.04",
-    "container": "node:24-alpine"
+    "container": "node:26-alpine"
   },
   "linux-arm64-musl": {
     "os": ["linux"],
     "cpu": ["arm64"],
     "libc": ["musl"],
     "runner": "ubuntu-24.04-arm",
-    "container": "node:24-alpine"
+    "container": "node:26-alpine"
   }
 }
