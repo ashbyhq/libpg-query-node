@@ -12,9 +12,10 @@ import descriptor from "./gen/pg_query.json";
  * The bound is a safety property, not a quota. Past it the JS stack gives out
  * with a bare RangeError; and if the stack is enlarged so JS survives,
  * `deparseRawStmt` on the C side has no depth guard of its own and segfaults.
- * Measured on darwin-arm64 / Node 24: the JS stack runs out around 2050 levels
- * and the C deparser dies around 8000. This sits under both, so deep input
- * fails with a message that says what happened.
+ * The exact JS stack ceiling varies by V8 and platform. On darwin-arm64, Node
+ * 24.22.2 and 26.13.0 both reach this guard before stack exhaustion; the C
+ * deparser dies around 8000. This sits under both, so deep input fails with a
+ * message that says what happened.
  */
 const RECURSION_LIMIT = 2000;
 
